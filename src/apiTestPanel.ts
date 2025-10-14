@@ -5,7 +5,7 @@ import { EnvironmentManager, Environment } from './environmentManager';
 import axios, { AxiosError } from 'axios';
 
 export class ApiTestPanel {
-    public static currentPanel: ApiTestPanel | undefined;
+    private static panels: Map<string, ApiTestPanel> = new Map();
     public static readonly viewType = 'apiTestPanel';
 
     private readonly _panel: vscode.WebviewPanel;
@@ -14,26 +14,38 @@ export class ApiTestPanel {
     private _currentEndpoint: ApiEndpointInfo | undefined;
     private _requestGenerator: ApiRequestGenerator;
     private _environmentManager: EnvironmentManager;
+    private _panelKey: string;
 
     public static createOrShow(extensionUri: vscode.Uri, endpoint?: ApiEndpointInfo) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
 
-        // If we already have a panel, show it
-        if (ApiTestPanel.currentPanel) {
-            ApiTestPanel.currentPanel._panel.reveal(column);
+        // Generate unique key for this endpoint
+        const panelKey = endpoint
+            ? `${endpoint.method}-${endpoint.route}`
+            : 'default';
+
+        // If we already have a panel for this endpoint, show it
+        if (ApiTestPanel.panels.has(panelKey)) {
+            const existingPanel = ApiTestPanel.panels.get(panelKey)!;
+            existingPanel._panel.reveal(column);
             if (endpoint) {
-                ApiTestPanel.currentPanel._currentEndpoint = endpoint;
-                ApiTestPanel.currentPanel.updateContent();
+                existingPanel._currentEndpoint = endpoint;
+                existingPanel.updateContent();
             }
             return;
         }
 
-        // Otherwise, create a new panel
+        // Create title with endpoint info
+        const title = endpoint
+            ? `[TEST] ${endpoint.method} ${endpoint.route}`
+            : 'API Test Panel';
+
+        // Create a new panel
         const panel = vscode.window.createWebviewPanel(
             ApiTestPanel.viewType,
-            'API Test Panel',
+            title,
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
@@ -42,17 +54,20 @@ export class ApiTestPanel {
             }
         );
 
-        ApiTestPanel.currentPanel = new ApiTestPanel(panel, extensionUri, endpoint);
+        const apiTestPanel = new ApiTestPanel(panel, extensionUri, endpoint, panelKey);
+        ApiTestPanel.panels.set(panelKey, apiTestPanel);
     }
 
     private constructor(
         panel: vscode.WebviewPanel,
         _extensionUri: vscode.Uri,
-        endpoint?: ApiEndpointInfo
+        endpoint: ApiEndpointInfo | undefined,
+        panelKey: string
     ) {
         this._panel = panel;
         this._extensionUri = _extensionUri;
         this._currentEndpoint = endpoint;
+        this._panelKey = panelKey;
         this._requestGenerator = new ApiRequestGenerator();
         this._environmentManager = EnvironmentManager.getInstance();
 
@@ -427,406 +442,798 @@ export class ApiTestPanel {
         const endpointMethod = endpoint.method;
         const endpointRoute = endpoint.route;
 
+        // Parse query params from the generated request
+        const queryParamsJson = JSON.stringify(request.queryParams);
+        const headersJson = JSON.stringify(request.headers);
+        const bodyJson = request.body ? JSON.stringify(request.body, null, 2) : '';
+
+        // Get base URL without query string
+        const urlWithoutQuery = request.url.split('?')[0];
+
+        // Get method badge class
+        const methodClass = `method-${endpointMethod.toLowerCase()}`;
+
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval'; font-src 'self';">
-    <title>API Test Panel - ${endpoint.method} ${endpoint.route}</title>
+    <title>${endpoint.method} ${endpoint.route}</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
             font-family: var(--vscode-font-family);
             color: var(--vscode-foreground);
             background-color: var(--vscode-editor-background);
-            padding: 20px;
+            padding: 0;
             margin: 0;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        .button-group {
+            height: 100vh;
+            overflow: hidden;
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            flex-direction: column;
         }
-        button {
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        /* Request Line */
+        .request-line {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            padding: 20px;
+            background: var(--vscode-editor-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+
+        .method-badge {
             padding: 8px 16px;
-            border: none;
-            border-radius: 3px;
-            cursor: pointer;
+            border-radius: 4px;
             font-weight: bold;
-            background-color: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
+            font-size: 13px;
+            text-align: center;
+            min-width: 70px;
+            flex-shrink: 0;
         }
-        button:hover {
-            background-color: var(--vscode-button-hoverBackground);
+
+        .method-get { background: #61AFFE; color: white; }
+        .method-post { background: #49CC90; color: white; }
+        .method-put { background: #FCA130; color: white; }
+        .method-delete { background: #F93E3E; color: white; }
+        .method-patch { background: #50E3C2; color: white; }
+
+        .url-input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
         }
-        #result {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 5px;
-            background-color: var(--vscode-editor-inactiveSelectionBackground);
+
+        .url-input:focus {
+            outline: none;
+            border-color: #49CC90;
         }
-                .form-group {
+
+        .send-button {
+            padding: 10px 35px;
+            background: #49CC90;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .send-button:hover {
+            background: #3DB87C;
+        }
+
+        .send-button:active {
+            background: #35A56D;
+        }
+
+        /* Tab Navigation */
+        .tabs-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .tab-nav {
+            display: flex;
+            background: var(--vscode-editor-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            padding: 0 20px;
+        }
+
+        .tab-button {
+            padding: 12px 20px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            opacity: 0.7;
+        }
+
+        .tab-button:hover {
+            opacity: 1;
+        }
+
+        .tab-button.active {
+            border-bottom-color: #49CC90;
+            color: #49CC90;
+            opacity: 1;
+        }
+
+        .tab-content {
+            display: none;
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Params Table */
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
             margin-bottom: 15px;
         }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
+
+        .params-table thead {
+            background: var(--vscode-editor-inactiveSelectionBackground);
         }
-        .form-control-wrapper {
-            position: relative;
+
+        .params-table th {
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--vscode-descriptionForeground);
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--vscode-panel-border);
         }
-        .format-button {
-            position: absolute;
-            top: 5px;
-            right: 5px;
+
+        .params-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+
+        .params-table tr:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+
+        .params-table input[type="checkbox"] {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+        }
+
+        .params-table input[type="text"] {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid transparent;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border-radius: 3px;
+            font-size: 13px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        .params-table input[type="text"]:focus {
+            outline: none;
+            border-color: #49CC90;
+            background: var(--vscode-editor-background);
+        }
+
+        .param-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .action-icon {
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+            font-size: 16px;
+        }
+
+        .action-icon:hover {
+            opacity: 1;
+        }
+
+        .add-param-btn {
+            padding: 8px 16px;
             background: var(--vscode-button-secondaryBackground);
             color: var(--vscode-button-secondaryForeground);
             border: none;
-            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .add-param-btn:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+
+        /* Body Editor */
+        .body-editor {
+            height: 400px;
+        }
+
+        .body-editor textarea {
+            width: 100%;
+            height: 100%;
+            padding: 15px;
+            border: 1px solid var(--vscode-input-border);
+            background-color: var(--vscode-textCodeBlock-background);
+            color: var(--vscode-editor-foreground);
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            resize: vertical;
+        }
+
+        .body-editor textarea:focus {
+            outline: none;
+            border-color: #49CC90;
+        }
+
+        .format-button {
+            position: absolute;
+            top: 25px;
+            right: 25px;
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: none;
+            padding: 6px 12px;
             border-radius: 3px;
             font-size: 11px;
             cursor: pointer;
             z-index: 10;
         }
+
         .format-button:hover {
             background: var(--vscode-button-secondaryHoverBackground);
         }
-        input, textarea {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-            font-family: var(--vscode-font-family);
-            box-sizing: border-box;
-        }
-        textarea {
-            min-height: 100px;
-            resize: vertical;
-            padding-right: 60px; /* Make room for format button */
-        }
+
+        /* Response Container */
         .response-container {
-            margin-top: 20px;
-        }
-        .response-status {
-            background: var(--vscode-editor-inactiveSelectionBackground);
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 10px;
-            border-left: 4px solid var(--vscode-textLink-foreground);
-        }
-        .response-status.success {
-            border-left-color: #4CAF50;
-        }
-        .response-status.error {
-            border-left-color: #F44336;
-        }
-        .response-content {
-            background: var(--vscode-textCodeBlock-background);
-            border-radius: 5px;
+            border-top: 3px solid var(--vscode-panel-border);
+            flex: 1;
+            display: none;
+            flex-direction: column;
             overflow: hidden;
         }
-        .response-tabs {
+
+        .response-container.visible {
             display: flex;
+        }
+
+        .response-status-bar {
+            padding: 15px 20px;
             background: var(--vscode-editor-inactiveSelectionBackground);
             border-bottom: 1px solid var(--vscode-panel-border);
+            display: flex;
+            gap: 25px;
+            align-items: center;
         }
+
+        .response-status-bar.success {
+            border-left: 4px solid #49CC90;
+        }
+
+        .response-status-bar.error {
+            border-left: 4px solid #F93E3E;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .status-item strong {
+            font-weight: 600;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .status-code {
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .status-code.success {
+            color: #49CC90;
+        }
+
+        .status-code.error {
+            color: #F93E3E;
+        }
+
+        .response-tabs {
+            display: flex;
+            background: var(--vscode-editor-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            padding: 0 20px;
+        }
+
         .response-tab {
-            padding: 10px 15px;
-            cursor: pointer;
-            border: none;
+            padding: 10px 18px;
             background: none;
-            color: var(--vscode-foreground);
+            border: none;
             border-bottom: 2px solid transparent;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            font-size: 13px;
+            opacity: 0.7;
         }
+
+        .response-tab:hover {
+            opacity: 1;
+        }
+
         .response-tab.active {
-            border-bottom-color: var(--vscode-textLink-foreground);
-            color: var(--vscode-textLink-foreground);
-            background: var(--vscode-textCodeBlock-background);
+            border-bottom-color: #49CC90;
+            color: #49CC90;
+            opacity: 1;
         }
-        .response-tab-content {
+
+        .response-content {
+            flex: 1;
+            overflow: auto;
             display: none;
-            padding: 15px;
+            padding: 20px;
             position: relative;
         }
-        .response-tab-content.active {
+
+        .response-content.active {
             display: block;
         }
-        .format-response-button {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: var(--vscode-button-secondaryBackground);
-            color: var(--vscode-button-secondaryForeground);
-            border: none;
-            padding: 4px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            cursor: pointer;
+
+        .response-content pre {
+            background: var(--vscode-textCodeBlock-background);
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--vscode-descriptionForeground);
+            font-size: 14px;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--vscode-editor-background);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground);
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>API Test Panel</h1>
-        <div>
-            <strong>Method:</strong> ${endpoint.method}<br>
-            <strong>Route:</strong> ${endpoint.route}<br>
-            <strong>Environment:</strong> ${currentEnvironment.name}
+        <!-- Request Line -->
+        <div class="request-line">
+            <span class="method-badge ${methodClass}">${endpointMethod}</span>
+            <input type="text" class="url-input" id="fullUrl" value="${request.url}" />
+            <button class="send-button" onclick="sendRequest()">Send</button>
         </div>
 
-        <div class="form-group">
-            <label for="fullUrl">Full URL:</label>
-            <input type="text" id="fullUrl" value="${request.url}" />
+        <!-- Request Tabs -->
+        <div class="tabs-container">
+            <div class="tab-nav">
+                <button class="tab-button ${Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
+                <button class="tab-button ${Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
+                ${request.body ? '<button class="tab-button" onclick="switchTab(\'body\')">Body</button>' : ''}
+            </div>
+
+            <!-- Query Tab -->
+            <div class="tab-content ${Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">✓</th>
+                            <th style="width: 30%;">Key</th>
+                            <th style="width: 30%;">Value</th>
+                            <th>Description</th>
+                            <th style="width: 80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="query-params-body">
+                        <!-- Will be populated by JavaScript -->
+                    </tbody>
+                </table>
+                <button class="add-param-btn" onclick="addQueryParam()">+ Add Query Parameter</button>
+            </div>
+
+            <!-- Headers Tab -->
+            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !request.body ? 'active' : ''}" id="headers-tab">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">✓</th>
+                            <th style="width: 30%;">Key</th>
+                            <th style="width: 30%;">Value</th>
+                            <th>Description</th>
+                            <th style="width: 80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="headers-params-body">
+                        <!-- Will be populated by JavaScript -->
+                    </tbody>
+                </table>
+                <button class="add-param-btn" onclick="addHeader()">+ Add Header</button>
+            </div>
+
+            ${request.body ? `
+            <!-- Body Tab -->
+            <div class="tab-content" id="body-tab">
+                <div class="body-editor" style="position: relative;">
+                    <button class="format-button" onclick="formatBodyJson()">Format JSON</button>
+                    <textarea id="request-body">${bodyJson}</textarea>
+                </div>
+            </div>
+            ` : ''}
         </div>
 
-        <div class="form-group">
-            <label for="headers">Headers (JSON):</label>
-            <div class="form-control-wrapper">
-                <textarea id="headers">${JSON.stringify(request.headers, null, 2)}</textarea>
-                <button type="button" class="format-button" onclick="formatJson('headers')">Format</button>
+        <!-- Response Container -->
+        <div class="response-container" id="response-container">
+            <div class="response-status-bar" id="response-status-bar">
+                <div class="status-item">
+                    <strong>Status:</strong>
+                    <span class="status-code" id="status-code">200 OK</span>
+                </div>
+                <div class="status-item">
+                    <strong>Time:</strong>
+                    <span id="response-time">0ms</span>
+                </div>
+                <div class="status-item">
+                    <strong>Size:</strong>
+                    <span id="response-size">0 B</span>
+                </div>
+            </div>
+
+            <div class="response-tabs">
+                <button class="response-tab active" onclick="switchResponseTab('body')">Body</button>
+                <button class="response-tab" onclick="switchResponseTab('headers')">Headers</button>
+            </div>
+
+            <div class="response-content active" id="response-body-tab">
+                <div class="empty-state">No response yet. Click Send to make a request.</div>
+            </div>
+
+            <div class="response-content" id="response-headers-tab">
+                <pre>{}</pre>
             </div>
         </div>
-
-        ${request.body ? `
-        <div class="form-group">
-            <label for="requestBody">Request Body (JSON):</label>
-            <div class="form-control-wrapper">
-                <textarea id="requestBody">${JSON.stringify(request.body, null, 2)}</textarea>
-                <button type="button" class="format-button" onclick="formatJson('requestBody')">Format</button>
-            </div>
-        </div>
-        ` : ''}
-
-        <div class="button-group">
-            <button id="testButton" onclick="testApiFunction()">🚀 Test API</button>
-            <button onclick="testConnectionFunction()" style="background-color: orange;">🔧 Test Connection</button>
-        </div>
-
-        <div id="result"></div>
     </div>
 
     <script>
-        console.log('🔧 Script starting to load...');
+        // Initialize VS Code API
+        const vscode = acquireVsCodeApi();
 
-        // Global error handler
-        window.onerror = function(message, source, lineno, colno, error) {
-            console.error('🚨 JavaScript Error:', {
-                message: message,
-                source: source,
-                line: lineno,
-                column: colno,
-                error: error
+        // Initial data
+        let queryParams = ${queryParamsJson};
+        let headers = ${headersJson};
+        const baseUrl = '${urlWithoutQuery}';
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            renderQueryParams();
+            renderHeaders();
+            updateUrlFromQueryParams();
+        });
+
+        // Tab switching
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(tabName + '-tab').classList.add('active');
+        }
+
+        function switchResponseTab(tabName) {
+            document.querySelectorAll('.response-tab').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.response-content').forEach(content => content.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById('response-' + tabName + '-tab').classList.add('active');
+        }
+
+        // Query params rendering
+        function renderQueryParams() {
+            const tbody = document.getElementById('query-params-body');
+            tbody.innerHTML = '';
+
+            Object.entries(queryParams).forEach(([key, value]) => {
+                const row = createParamRow(key, value, 'query');
+                tbody.appendChild(row);
             });
-            document.getElementById('result').innerHTML = '<div style="color: red;">JavaScript Error: ' + message + '</div>';
-            return true;
-        };
+        }
 
-        console.log('🔧 Error handler set up');
+        // Headers rendering
+        function renderHeaders() {
+            const tbody = document.getElementById('headers-params-body');
+            tbody.innerHTML = '';
 
-        // Check VSCode API
-        let vsCodeApi = null;
-        try {
-            if (typeof acquireVsCodeApi !== 'undefined') {
-                vsCodeApi = acquireVsCodeApi();
-                console.log('📡 VSCode API acquired successfully');
-                window.vsCodeApi = vsCodeApi;
-            } else {
-                console.error('❌ acquireVsCodeApi not found');
-                document.getElementById('result').innerHTML = '<div style="color: red;">VSCode API not available</div>';
+            Object.entries(headers).forEach(([key, value]) => {
+                const row = createParamRow(key, value, 'header');
+                tbody.appendChild(row);
+            });
+        }
+
+        // Create param row
+        function createParamRow(key, value, type) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = \`
+                <td><input type="checkbox" checked onchange="toggleParam('\${type}', '\${key}')" /></td>
+                <td><input type="text" value="\${key}" onchange="updateParamKey('\${type}', '\${key}', this.value)" /></td>
+                <td><input type="text" value="\${value}" oninput="updateParamValue('\${type}', '\${key}', this.value)" /></td>
+                <td><input type="text" placeholder="Description" /></td>
+                <td class="param-actions">
+                    <span class="action-icon" onclick="deleteParam('\${type}', '\${key}')" title="Delete">🗑️</span>
+                </td>
+            \`;
+            return tr;
+        }
+
+        // Add query param
+        function addQueryParam() {
+            const newKey = 'new_param';
+            queryParams[newKey] = '';
+            renderQueryParams();
+            updateUrlFromQueryParams();
+        }
+
+        // Add header
+        function addHeader() {
+            const newKey = 'New-Header';
+            headers[newKey] = '';
+            renderHeaders();
+        }
+
+        // Update param value
+        function updateParamValue(type, key, newValue) {
+            if (type === 'query') {
+                queryParams[key] = newValue;
+                updateUrlFromQueryParams();
+            } else if (type === 'header') {
+                headers[key] = newValue;
             }
-        } catch (error) {
-            console.error('❌ Error acquiring VSCode API:', error);
-            document.getElementById('result').innerHTML = '<div style="color: red;">Error acquiring VSCode API: ' + error.message + '</div>';
         }
 
-        // Test connection function
-        function testConnectionFunction() {
-            console.log('✅ Test connection called!');
-            alert('Test connection works!' + String.fromCharCode(10) + 'VSCode API: ' + (vsCodeApi ? 'Available' : 'Not Available'));
+        // Update param key
+        function updateParamKey(type, oldKey, newKey) {
+            if (type === 'query') {
+                queryParams[newKey] = queryParams[oldKey];
+                delete queryParams[oldKey];
+                renderQueryParams();
+                updateUrlFromQueryParams();
+            } else if (type === 'header') {
+                headers[newKey] = headers[oldKey];
+                delete headers[oldKey];
+                renderHeaders();
+            }
         }
 
-        // JSON formatting function
-        function formatJson(textareaId) {
-            const textarea = document.getElementById(textareaId);
+        // Toggle param
+        function toggleParam(type, key) {
+            // For now, just remove from object if unchecked
+            // You can enhance this to keep disabled params
+        }
+
+        // Delete param
+        function deleteParam(type, key) {
+            if (type === 'query') {
+                delete queryParams[key];
+                renderQueryParams();
+                updateUrlFromQueryParams();
+            } else if (type === 'header') {
+                delete headers[key];
+                renderHeaders();
+            }
+        }
+
+        // Update URL from query params
+        function updateUrlFromQueryParams() {
+            const params = new URLSearchParams(queryParams);
+            const queryString = params.toString();
+            const newUrl = queryString ? baseUrl + '?' + queryString : baseUrl;
+            document.getElementById('fullUrl').value = newUrl;
+        }
+
+        // Parse URL to query params
+        function parseUrlToQueryParams() {
+            const url = document.getElementById('fullUrl').value;
+            try {
+                const urlObj = new URL(url);
+                queryParams = {};
+                urlObj.searchParams.forEach((value, key) => {
+                    queryParams[key] = value;
+                });
+                renderQueryParams();
+            } catch (e) {
+                console.error('Invalid URL', e);
+            }
+        }
+
+        // Listen to URL changes
+        document.getElementById('fullUrl').addEventListener('change', parseUrlToQueryParams);
+
+        // Format JSON
+        function formatBodyJson() {
+            const textarea = document.getElementById('request-body');
             try {
                 const parsed = JSON.parse(textarea.value);
                 textarea.value = JSON.stringify(parsed, null, 2);
-                console.log('✅ JSON formatted for:', textareaId);
             } catch (error) {
-                alert('Invalid JSON format: ' + error.message);
-                console.error('❌ JSON format error:', error);
+                alert('Invalid JSON: ' + error.message);
             }
         }
 
+        // Send request
+        function sendRequest() {
+            const url = document.getElementById('fullUrl').value;
+            const bodyElement = document.getElementById('request-body');
+            const body = bodyElement ? bodyElement.value : null;
+
+            try {
+                const requestData = {
+                    method: '${endpointMethod}',
+                    url: url,
+                    headers: headers,
+                    body: body ? JSON.parse(body) : null
+                };
+
+                // Show loading
+                const responseContainer = document.getElementById('response-container');
+                responseContainer.classList.add('visible');
+                document.getElementById('response-body-tab').innerHTML = '<div class="empty-state">Loading...</div>';
+
+                vscode.postMessage({
+                    type: 'testApi',
+                    data: requestData
+                });
+            } catch (error) {
+                alert('Error preparing request: ' + error.message);
+            }
+        }
+
+        // Handle messages from extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+
+            if (message.type === 'testResult') {
+                displayResponse(message.result);
+            }
+        });
+
+        // Display response
+        function displayResponse(result) {
+            const statusBar = document.getElementById('response-status-bar');
+            const statusCode = document.getElementById('status-code');
+            const responseTime = document.getElementById('response-time');
+            const responseSize = document.getElementById('response-size');
+            const bodyTab = document.getElementById('response-body-tab');
+            const headersTab = document.getElementById('response-headers-tab');
+
+            // Update status
+            if (result.success) {
+                statusBar.classList.remove('error');
+                statusBar.classList.add('success');
+                statusCode.classList.remove('error');
+                statusCode.classList.add('success');
+            } else {
+                statusBar.classList.remove('success');
+                statusBar.classList.add('error');
+                statusCode.classList.remove('success');
+                statusCode.classList.add('error');
+            }
+
+            statusCode.textContent = result.status + ' ' + result.statusText;
+            responseTime.textContent = result.duration + 'ms';
+
+            // Calculate size
+            const dataSize = JSON.stringify(result.data).length;
+            responseSize.textContent = formatBytes(dataSize);
+
+            // Update body
+            if (result.data) {
+                const formattedData = typeof result.data === 'string'
+                    ? result.data
+                    : JSON.stringify(result.data, null, 2);
+                bodyTab.innerHTML = '<button class="format-button" onclick="formatResponseJson()">Format JSON</button><pre>' + formattedData + '</pre>';
+            } else {
+                bodyTab.innerHTML = '<div class="empty-state">No response body</div>';
+            }
+
+            // Update headers
+            if (result.headers) {
+                headersTab.innerHTML = '<pre>' + JSON.stringify(result.headers, null, 2) + '</pre>';
+            }
+
+            // Show error if exists
+            if (result.error) {
+                bodyTab.innerHTML += '<div style="color: #F93E3E; margin-top: 15px; padding: 15px; background: var(--vscode-inputValidation-errorBackground); border-radius: 4px;"><strong>Error:</strong> ' + result.error + '</div>';
+            }
+        }
+
+        // Format bytes
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
         // Format response JSON
-        function formatResponseJson(containerId) {
-            const container = document.getElementById(containerId);
-            const pre = container.querySelector('pre');
+        function formatResponseJson() {
+            const bodyTab = document.getElementById('response-body-tab');
+            const pre = bodyTab.querySelector('pre');
             if (pre) {
                 try {
                     const parsed = JSON.parse(pre.textContent);
                     pre.textContent = JSON.stringify(parsed, null, 2);
-                    console.log('✅ Response JSON formatted');
                 } catch (error) {
-                    alert('Cannot format response: ' + error.message);
+                    console.error('Cannot format response:', error);
                 }
             }
         }
-
-        // Test API function
-        function testApiFunction() {
-            console.log('🚀 Test API called!');
-
-            if (!vsCodeApi) {
-                alert('VSCode API not available!');
-                return;
-            }
-
-            const fullUrl = document.getElementById('fullUrl').value;
-            const headersText = document.getElementById('headers').value;
-            const bodyElement = document.getElementById('requestBody');
-            const bodyText = bodyElement ? bodyElement.value : null;
-
-            console.log('📝 Form data:', { fullUrl, headersText, bodyText });
-
-            try {
-                const headers = JSON.parse(headersText);
-                let body = null;
-                if (bodyText) {
-                    body = JSON.parse(bodyText);
-                }
-
-                const requestData = {
-                    method: '${endpointMethod}',
-                    url: fullUrl,
-                    headers: headers,
-                    body: body
-                };
-
-                console.log('📤 Sending to backend:', requestData);
-
-                document.getElementById('result').innerHTML = '<div>🚀 Testing API...</div>';
-
-                vsCodeApi.postMessage({
-                    type: 'testApi',
-                    data: requestData
-                });
-
-                console.log('✅ Message sent successfully');
-            } catch (error) {
-                console.error('❌ Error:', error);
-                document.getElementById('result').innerHTML = '<div style="color: red;">Error: ' + error.message + '</div>';
-            }
-        }
-
-        // Message handler
-        window.addEventListener('message', event => {
-            const message = event.data;
-            console.log('📨 Received message:', message);
-
-            if (message.type === 'testResult') {
-                displayTestResult(message.result);
-            }
-        });
-
-        function displayTestResult(result) {
-            console.log('📊 Displaying test result:', result);
-
-            const resultDiv = document.getElementById('result');
-            const statusClass = result.success ? 'success' : 'error';
-            const statusIcon = result.success ? '✅' : '❌';
-
-            let html = '<div class="response-container">';
-
-            // Status section
-            html += '<div class="response-status ' + statusClass + '">';
-            html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
-            html += '<div>';
-            html += '<h3 style="margin: 0 0 8px 0;">' + statusIcon + ' Response Status</h3>';
-            html += '<div><strong>Status:</strong> ' + result.status + ' ' + result.statusText + '</div>';
-            if (result.duration) {
-                html += '<div><strong>Duration:</strong> ' + result.duration + 'ms</div>';
-            }
-            if (result.requestConfig) {
-                html += '<div><strong>Request:</strong> ' + result.requestConfig.method + ' ' + result.requestConfig.url + '</div>';
-            }
-            html += '</div>';
-            html += '</div>';
-            if (result.error) {
-                html += '<div style="margin-top: 10px; color: #F44336;"><strong>Error:</strong> ' + result.error + '</div>';
-            }
-            html += '</div>';
-
-            // Content section with tabs
-            if (result.data !== null && result.data !== undefined) {
-                html += '<div class="response-content">';
-                html += '<div class="response-tabs">';
-                html += '<button class="response-tab active" onclick="showResponseTab(\\'response\\')">Response Body</button>';
-                html += '<button class="response-tab" onclick="showResponseTab(\\'headers\\')">Headers</button>';
-                html += '</div>';
-
-                // Response body tab
-                html += '<div id="response-tab" class="response-tab-content active">';
-                html += '<button class="format-response-button" onclick="formatResponseJson(\\'response-tab\\')">Format JSON</button>';
-                html += '<pre id="response-data">';
-                if (typeof result.data === 'string') {
-                    html += result.data;
-                } else {
-                    html += JSON.stringify(result.data, null, 2);
-                }
-                html += '</pre>';
-                html += '</div>';
-
-                // Headers tab
-                html += '<div id="headers-tab" class="response-tab-content">';
-                html += '<button class="format-response-button" onclick="formatResponseJson(\\'headers-tab\\')">Format JSON</button>';
-                if (result.headers && Object.keys(result.headers).length > 0) {
-                    html += '<pre>' + JSON.stringify(result.headers, null, 2) + '</pre>';
-                } else {
-                    html += '<div style="color: var(--vscode-descriptionForeground); font-style: italic; padding: 10px;">No headers received</div>';
-                }
-                html += '</div>';
-
-                html += '</div>';
-            } else {
-                html += '<div class="response-content" style="padding: 15px; text-align: center; color: var(--vscode-descriptionForeground);">';
-                html += 'No response body received';
-                html += '</div>';
-            }
-
-            html += '</div>';
-            resultDiv.innerHTML = html;
-        }
-
-        function showResponseTab(tabName) {
-            // Hide all tabs
-            document.querySelectorAll('.response-tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.querySelectorAll('.response-tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-
-            // Show selected tab
-            document.getElementById(tabName + '-tab').classList.add('active');
-            event.target.classList.add('active');
-        }
-
-        console.log('🔧 Script loaded completely');
     </script>
 </body>
 </html>`;
     }
 
     public dispose() {
-        ApiTestPanel.currentPanel = undefined;
+        ApiTestPanel.panels.delete(this._panelKey);
 
         // Clean up our resources
         this._panel.dispose();
