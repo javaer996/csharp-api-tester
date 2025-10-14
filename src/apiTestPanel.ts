@@ -205,13 +205,20 @@ export class ApiTestPanel {
         const parsedClasses = new Set<string>();
 
         for (const param of this._currentEndpoint.parameters) {
-            // Skip if already parsed or not body/form parameter
-            if (param.properties || (param.source !== 'body' && param.source !== 'form')) {
-                continue;
-            }
+            // Only parse if it's a body/form parameter AND hasn't been successfully parsed yet
+            if ((param.source === 'body' || param.source === 'form')) {
+                // Check if already parsed successfully (has properties with length > 0)
+                const alreadyParsed = param.properties && param.properties.length > 0;
 
-            // Parse recursively
-            await this.parseClassRecursively(param.type, param, document, classParser, parsedClasses);
+                if (alreadyParsed) {
+                    console.log(`[ApiTestPanel] ⚡ Using cached properties for ${param.type} (${param.properties!.length} properties)`);
+                    continue;
+                }
+
+                // Parse recursively
+                console.log(`[ApiTestPanel] 📦 Parsing ${param.type}...`);
+                await this.parseClassRecursively(param.type, param, document, classParser, parsedClasses);
+            }
         }
 
         console.log('[ApiTestPanel] ✅ Class definitions parsing complete');

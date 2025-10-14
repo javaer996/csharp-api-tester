@@ -92,6 +92,7 @@ export class CSharpClassParser {
         // Check cache first
         const cached = this.cache.get(actualClassName);
         if (cached) {
+            console.log(`[CSharpClassParser] ✅ Cache hit for ${actualClassName} (${cached.properties.length} properties)`);
             return cached.properties;
         }
 
@@ -101,28 +102,35 @@ export class CSharpClassParser {
             return propertiesFromCurrent;
         }
 
-        // Search in workspace C# files with improved exclusions
-        const files = await vscode.workspace.findFiles(
-            '**/*.cs',
-            '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
-            200 // Increased from 50 to 200
-        );
-        console.log(`[CSharpClassParser] Found ${files.length} C# files in workspace`);
+        // Search in workspace C# files with improved exclusions and error handling
+        try {
+            const files = await vscode.workspace.findFiles(
+                '**/*.cs',
+                '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
+                300 // Increased from 200 to 300 for larger projects
+            );
+            console.log(`[CSharpClassParser] Found ${files.length} C# files in workspace`);
 
-        for (const fileUri of files) {
-            try {
-                const document = await vscode.workspace.openTextDocument(fileUri);
-                const properties = this.parseClassDefinition(document, actualClassName);
-                if (properties) {
-                    console.log(`[CSharpClassParser] Found ${actualClassName} in ${fileUri.fsPath}`);
-                    return properties;
+            for (const fileUri of files) {
+                try {
+                    const document = await vscode.workspace.openTextDocument(fileUri);
+                    const properties = this.parseClassDefinition(document, actualClassName);
+                    if (properties && properties.length > 0) {
+                        console.log(`[CSharpClassParser] ✅ Found ${actualClassName} in ${fileUri.fsPath} with ${properties.length} properties`);
+                        return properties;
+                    }
+                } catch (fileError) {
+                    console.error(`[CSharpClassParser] ⚠️ Error reading file ${fileUri.fsPath}:`, fileError);
+                    // Continue with next file instead of stopping
+                    continue;
                 }
-            } catch (error) {
-                console.error(`[CSharpClassParser] Error reading file ${fileUri.fsPath}:`, error);
             }
+        } catch (searchError) {
+            console.error(`[CSharpClassParser] ❌ Error searching workspace:`, searchError);
+            return null;
         }
 
-        console.log(`[CSharpClassParser] Class ${actualClassName} not found in workspace`);
+        console.log(`[CSharpClassParser] ❌ Class ${actualClassName} not found in workspace`);
         return null;
     }
 
@@ -388,6 +396,7 @@ export class CSharpClassParser {
         // Check cache first
         const cached = this.cache.get(actualClassName);
         if (cached && cached.classDefinition) {
+            console.log(`[CSharpClassParser] ✅ Cache hit for ${actualClassName} definition`);
             return cached.classDefinition;
         }
 
@@ -397,27 +406,34 @@ export class CSharpClassParser {
             return definitionFromCurrent;
         }
 
-        // Search in workspace C# files
-        const files = await vscode.workspace.findFiles(
-            '**/*.cs',
-            '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
-            200
-        );
+        // Search in workspace C# files with improved error handling
+        try {
+            const files = await vscode.workspace.findFiles(
+                '**/*.cs',
+                '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
+                300 // Increased from 200 to 300 for larger projects
+            );
 
-        for (const fileUri of files) {
-            try {
-                const document = await vscode.workspace.openTextDocument(fileUri);
-                const definition = this.getClassDefinitionText(document, actualClassName);
-                if (definition) {
-                    console.log(`[CSharpClassParser] Found definition for ${actualClassName} in ${fileUri.fsPath}`);
-                    return definition;
+            for (const fileUri of files) {
+                try {
+                    const document = await vscode.workspace.openTextDocument(fileUri);
+                    const definition = this.getClassDefinitionText(document, actualClassName);
+                    if (definition) {
+                        console.log(`[CSharpClassParser] ✅ Found definition for ${actualClassName} in ${fileUri.fsPath}`);
+                        return definition;
+                    }
+                } catch (fileError) {
+                    console.error(`[CSharpClassParser] ⚠️ Error reading file ${fileUri.fsPath}:`, fileError);
+                    // Continue with next file instead of stopping
+                    continue;
                 }
-            } catch (error) {
-                console.error(`[CSharpClassParser] Error reading file ${fileUri.fsPath}:`, error);
             }
+        } catch (searchError) {
+            console.error(`[CSharpClassParser] ❌ Error searching workspace:`, searchError);
+            return null;
         }
 
-        console.log(`[CSharpClassParser] Definition for ${actualClassName} not found in workspace`);
+        console.log(`[CSharpClassParser] ❌ Definition for ${actualClassName} not found in workspace`);
         return null;
     }
 

@@ -70,6 +70,10 @@
       {
         "command": "csharpApiTester.testDebug",
         "title": "C#HttpRequest: Test Debug"
+      },
+      {
+        "command": "csharpApiTester.toggleApiDetection",
+        "title": "C#HttpRequest: Toggle API Detection"
       }
     ],
     "configuration": {
@@ -150,6 +154,11 @@
           "type": "object",
           "default": {},
           "description": "Global headers applied to all requests"
+        },
+        "csharpApiTester.enableApiDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic API endpoint detection and CodeLens"
         }
       }
     }

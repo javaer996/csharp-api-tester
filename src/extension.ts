@@ -23,6 +23,13 @@ export function activate(context: vscode.ExtensionContext) {
     );
     console.log('✅ Code lens provider registered');
 
+    // Create status bar item for API detection toggle
+    const apiDetectionStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    apiDetectionStatusBar.command = 'csharpApiTester.toggleApiDetection';
+    updateApiDetectionStatusBar(apiDetectionStatusBar);
+    apiDetectionStatusBar.show();
+    context.subscriptions.push(apiDetectionStatusBar);
+
     // Register commands
     const testApiCommand = vscode.commands.registerCommand('csharpApiTester.testApi', async (apiInfo: any) => {
         console.log('🎯 testApi command triggered with:', apiInfo);
@@ -176,12 +183,33 @@ export function activate(context: vscode.ExtensionContext) {
                 controllerName: 'TestController'
             };
 
-            console.log('🧪 Creating test API panel...');
+            console.log('🧪 Creating test panel...');
             ApiTestPanel.createOrShow(context.extensionUri, testEndpoint);
             vscode.window.showInformationMessage('API Test Panel should now be open!');
         } catch (error) {
             console.error('❌ Error creating test panel:', error);
             vscode.window.showErrorMessage(`Error: ${error}`);
+        }
+    });
+
+    const toggleApiDetectionCommand = vscode.commands.registerCommand('csharpApiTester.toggleApiDetection', async () => {
+        const config = vscode.workspace.getConfiguration('csharpApiTester');
+        const currentValue = config.get<boolean>('enableApiDetection', true);
+        const newValue = !currentValue;
+
+        await config.update('enableApiDetection', newValue, vscode.ConfigurationTarget.Global);
+
+        // Update status bar
+        updateApiDetectionStatusBar(apiDetectionStatusBar);
+
+        if (newValue) {
+            vscode.window.showInformationMessage('✅ API Detection Enabled');
+            // Refresh code lenses
+            codeLensProvider.refresh();
+        } else {
+            vscode.window.showInformationMessage('❌ API Detection Disabled');
+            // Refresh to clear code lenses
+            codeLensProvider.refresh();
         }
     });
 
@@ -195,7 +223,8 @@ export function activate(context: vscode.ExtensionContext) {
         manageEnvironmentsCommand,
         switchEnvironmentCommand,
         openEnvironmentManagerCommand,
-        testDebugCommand
+        testDebugCommand,
+        toggleApiDetectionCommand
     );
 
     // Refresh code lenses when document changes
@@ -224,6 +253,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     console.log('C# API Tester extension is now deactivated!');
+}
+
+// Helper function to update API detection status bar
+function updateApiDetectionStatusBar(statusBar: vscode.StatusBarItem): void {
+    const config = vscode.workspace.getConfiguration('csharpApiTester');
+    const enabled = config.get<boolean>('enableApiDetection', true);
+
+    if (enabled) {
+        statusBar.text = '$(check) API Detection';
+        statusBar.tooltip = 'API Detection is enabled. Click to disable.';
+        statusBar.backgroundColor = undefined;
+    } else {
+        statusBar.text = '$(x) API Detection';
+        statusBar.tooltip = 'API Detection is disabled. Click to enable.';
+        statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    }
 }
 
 // Environment Management Helper Functions

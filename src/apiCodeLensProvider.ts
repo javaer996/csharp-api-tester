@@ -15,6 +15,15 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
         document: vscode.TextDocument,
         token: vscode.CancellationToken
     ): Promise<vscode.CodeLens[]> {
+        // Check if API detection is enabled
+        const config = vscode.workspace.getConfiguration('csharpApiTester');
+        const enableApiDetection = config.get<boolean>('enableApiDetection', true);
+
+        if (!enableApiDetection) {
+            console.log(`[C# API CodeLens] API detection is disabled`);
+            return [];
+        }
+
         console.log(`[C# API CodeLens] Providing code lenses for document: ${document.fileName}`);
         console.log(`[C# API CodeLens] Document language: ${document.languageId}`);
         console.log(`[C# API CodeLens] Document URI: ${document.uri.toString()}`);
