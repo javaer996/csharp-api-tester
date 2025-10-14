@@ -1,59 +1,73 @@
 # C# API Tester for Visual Studio Code
 
-An intelligent Visual Studio Code extension that automatically detects and tests C# Web API endpoints directly from your code editor.
+[中文文档](./README.zh-CN.md) | English
 
-## Features
+An intelligent Visual Studio Code extension that automatically detects and tests C# Web API endpoints directly from your code editor with AI-powered smart JSON generation.
 
-- 🔍 **Automatic API Detection**: Intelligently recognizes C# Web API controllers and methods
-- 🚀 **One-Click Testing**: Execute API calls directly from your code with a single click
-- 📝 **Smart Parameter Recognition**: Automatically identifies HTTP methods, routes, and parameter types
-- 🔗 **Parameter Analysis**: Distinguishes between path parameters, query parameters, request body, and headers
-- 🎯 **Intelligent Request Generation**: Creates sample request data based on parameter types and naming conventions
-- 🛠️ **Interactive Testing UI**: Built-in web interface for testing and viewing responses
-- ⚙️ **Configurable Settings**: Customize base URLs, headers, and request timeouts
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
+![License](https://img.shields.io/badge/license-MIT-orange)
 
-## How It Works
+## ✨ Key Features
 
-The extension analyzes your C# controller files to:
+### 🔍 Automatic API Detection
+- Intelligently recognizes C# Web API controllers and methods
+- Parses HTTP method attributes (`[HttpGet]`, `[HttpPost]`, etc.)
+- Extracts route templates from `[Route]` attributes
+- Analyzes method signatures and parameter sources
 
-1. **Detect API Endpoints**: Scans for controller classes and HTTP method attributes
-2. **Parse Parameters**: Identifies route parameters, query string parameters, and request body parameters
-3. **Generate Requests**: Creates intelligent sample data based on parameter types
-4. **Test APIs**: Executes HTTP requests and displays responses in an interactive panel
+### 🚀 One-Click Testing
+- Execute API calls directly from your code editor
+- CodeLens integration with inline "Test API" buttons
+- Interactive testing panel with Apifox-style UI
+- Multiple endpoints can be tested simultaneously
 
-## Supported HTTP Methods
+### 🎯 Smart Parameter Recognition
+- **Path Parameters**: `{id}` in routes
+- **Query Parameters**: `[FromQuery]` attributes
+- **Request Body**: `[FromBody]` attributes with full C# class parsing
+- **Headers**: `[FromHeader]` attributes
+- **Form Data**: `[FromForm]` attributes with file upload support
 
-- GET
-- POST
-- PUT
-- DELETE
-- PATCH
-- HEAD
-- OPTIONS
+### 🤖 AI-Powered JSON Generation
+- Generates realistic test data based on C# class definitions
+- Understands property names and types
+- Reads C# comments and attributes for context
+- Supports OpenAI, Azure OpenAI, and custom AI providers
+- Preserves conversation history per API panel
 
-## Usage
+### 🌍 Environment Management
+- Multiple environment support (Development, Staging, Production, etc.)
+- Each environment with custom base URL, base path, and headers
+- Quick switching between environments
+- Global header configuration
 
-1. Open a C# controller file in VS Code
-2. Look for the "🚀 Test API" button above each API method
-3. Click the button to open the testing panel
-4. Modify request parameters as needed
-5. Click "Test API" to execute the request
-6. View the response, status code, and response headers
+### 📝 Advanced Features
+- **Body Editor**: Full-featured JSON editor with formatting and AI generation
+- **Form Data Support**: File upload and form field testing
+- **Value Editor**: Expandable editor for long header/query values
+- **Response Viewer**: Formatted JSON with syntax highlighting
+- **Request History**: View AI conversation and restore original JSON
 
-## Configuration
+## 📦 Installation
 
-Configure the extension by:
+### From VS Code Marketplace
+1. Open VS Code
+2. Press `Ctrl+Shift+X` (Windows/Linux) or `Cmd+Shift+X` (Mac)
+3. Search for "C# API Tester"
+4. Click Install
 
-- **Command Palette**: `Ctrl+Shift+P` → "C# API Tester: Configure API Base URL"
-- **Settings**: Access via VS Code settings (`csharpApiTester`)
+### From VSIX File
+1. Download the `.vsix` file
+2. Open VS Code
+3. Press `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
+4. Select the downloaded file
 
-### Available Settings
+## 🚀 Quick Start
 
-- `csharpApiTester.baseUrl`: Default base URL for API testing (default: "http://localhost:5000")
-- `csharpApiTester.defaultHeaders`: Default headers to include in requests
-- `csharpApiTester.timeout`: Request timeout in milliseconds (default: 30000)
+### 1. Basic Usage
 
-## Example
+Open a C# controller file:
 
 ```csharp
 [ApiController]
@@ -67,39 +81,230 @@ public class UsersController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<User>> CreateUser([FromBody] CreateUserDto user)
+    public async Task<ActionResult<User>> CreateUser([FromBody] CreateUserDto userDto)
     {
         // Your code here
     }
 }
 ```
 
-The extension will automatically:
-- Detect the GET `/api/users/{id}` endpoint
-- Detect the POST `/api/users` endpoint
-- Generate appropriate sample data for testing
-- Display execution buttons above each method
+You'll see **"🚀 Test API"** buttons above each method. Click to test!
 
-## Requirements
+### 2. Environment Setup
 
-- Visual Studio Code 1.74.0 or higher
-- C# extension for syntax highlighting
+First time using? Set up your environment:
 
-## Installation
+1. Click the environment indicator in the status bar
+2. Choose "Add New Environment"
+3. Configure:
+   - **Name**: "Development"
+   - **Base URL**: "http://localhost:5000"
+   - **Base Path**: "/api" (optional)
+   - **Headers**: `{"Authorization": "Bearer token"}`
 
-1. Install the extension from the VS Code marketplace
-2. Open a C# controller file
-3. Start testing your APIs!
+### 3. AI Configuration (Optional)
 
-## Development
+Enable AI-powered JSON generation:
 
-To contribute or modify the extension:
+1. Open Settings: `Ctrl+,` → Search "C# API Tester"
+2. Configure AI settings:
+   ```json
+   {
+     "csharpApiTester.ai.enabled": true,
+     "csharpApiTester.ai.provider": "openai",
+     "csharpApiTester.ai.apiKey": "sk-...",
+     "csharpApiTester.ai.model": "gpt-3.5-turbo"
+   }
+   ```
 
-1. Clone the repository
-2. Run `npm install` to install dependencies
-3. Run `npm run compile` to compile the TypeScript code
-4. Press `F5` to open a new Extension Development Host window
+## 📖 Feature Details
 
-## License
+### Form Data & File Upload
 
-MIT License - see LICENSE file for details.
+Support for `[FromForm]` parameters:
+
+```csharp
+[HttpPost("upload")]
+public async Task<IActionResult> UploadFile(
+    [FromForm] IFormFile file,
+    [FromForm] string title,
+    [FromForm] string description)
+{
+    // Handle file upload
+}
+```
+
+The extension automatically:
+- Creates a **Form** tab in the test panel
+- Detects file fields (`IFormFile`, `Stream`, `byte[]`)
+- Supports text fields and file inputs
+- Sends `multipart/form-data` requests
+
+### AI Smart Generation
+
+When testing endpoints with complex request bodies:
+
+1. Click **"🤖 AI Generate"** button
+2. AI analyzes your C# class definition:
+   ```csharp
+   public class CreateUserDto
+   {
+       /// <summary>
+       /// User's full name
+       /// </summary>
+       public string Name { get; set; }
+
+       /// <summary>
+       /// Email address
+       /// </summary>
+       public string Email { get; set; }
+
+       public int Age { get; set; }
+   }
+   ```
+3. Generates realistic test data based on property names, types, and comments
+4. View the AI conversation with **"💬 View AI"** button
+5. Restore original template with **"↺ Restore"** button
+
+### Tab Priority
+
+The test panel intelligently selects the default tab:
+
+- **Form Tab** → If `[FromForm]` parameters exist
+- **Body Tab** → If `[FromBody]` parameters exist
+- **Query Tab** → If `[FromQuery]` parameters exist
+- **Headers Tab** → Fallback
+
+## ⚙️ Configuration
+
+### Extension Settings
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `csharpApiTester.timeout` | Request timeout (ms) | 30000 |
+| `csharpApiTester.ai.enabled` | Enable AI features | false |
+| `csharpApiTester.ai.provider` | AI provider | "openai" |
+| `csharpApiTester.ai.apiKey` | AI API key | "" |
+| `csharpApiTester.ai.endpoint` | AI API endpoint | "https://api.openai.com/v1/chat/completions" |
+| `csharpApiTester.ai.model` | AI model | "gpt-3.5-turbo" |
+| `csharpApiTester.ai.maxTokens` | Max tokens | 1000 |
+
+### AI Providers
+
+#### OpenAI
+```json
+{
+  "csharpApiTester.ai.provider": "openai",
+  "csharpApiTester.ai.apiKey": "sk-...",
+  "csharpApiTester.ai.endpoint": "https://api.openai.com/v1/chat/completions",
+  "csharpApiTester.ai.model": "gpt-3.5-turbo"
+}
+```
+
+#### Azure OpenAI
+```json
+{
+  "csharpApiTester.ai.provider": "azure-openai",
+  "csharpApiTester.ai.apiKey": "your-azure-key",
+  "csharpApiTester.ai.endpoint": "https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions?api-version=2024-02-15-preview",
+  "csharpApiTester.ai.model": "gpt-35-turbo"
+}
+```
+
+#### Custom Provider
+```json
+{
+  "csharpApiTester.ai.provider": "custom",
+  "csharpApiTester.ai.apiKey": "your-key",
+  "csharpApiTester.ai.endpoint": "https://your-api.com/v1/chat/completions"
+}
+```
+
+## 🎯 Advanced Usage
+
+### Multiple Environments
+
+Switch between environments quickly:
+
+```json
+// .vscode/settings.json
+{
+  "csharpApiTester.environments": [
+    {
+      "name": "Development",
+      "baseUrl": "http://localhost:5000",
+      "basePath": "/api",
+      "headers": {
+        "Authorization": "Bearer dev-token"
+      }
+    },
+    {
+      "name": "Staging",
+      "baseUrl": "https://staging-api.example.com",
+      "basePath": "",
+      "headers": {
+        "Authorization": "Bearer staging-token"
+      }
+    }
+  ]
+}
+```
+
+### Expandable Value Editor
+
+For long header values or query parameters:
+- Click the **⤢** icon next to the input field
+- Edit in a large textarea
+- Save changes back to the field
+
+## 🔧 Commands
+
+| Command | Description |
+|---------|-------------|
+| `C#HttpRequest: Test Debug` | Verify extension activation |
+| `C#HttpRequest: Debug API Detection` | View detected endpoints in console |
+| `C#HttpRequest: Manage Environments` | Open environment management |
+
+## 📝 Examples
+
+Check the `examples/` folder for comprehensive examples:
+
+- **UsersController**: CRUD operations with DTOs
+- **ProductsController**: Complex queries and updates
+- **UploadController**: File uploads and form data
+  - Single file upload
+  - Multiple files upload
+  - File with metadata
+  - Form-only submission
+  - Image upload with options
+
+## 🤝 Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'Add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
+
+## 🐛 Bug Reports
+
+Found a bug? Please open an issue with:
+- VS Code version
+- Extension version
+- Steps to reproduce
+- Expected vs actual behavior
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with VS Code Extension API
+- Powered by TypeScript and Axios
+
+---
+
+**Enjoy testing your C# APIs! 🚀**
