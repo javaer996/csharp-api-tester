@@ -9,6 +9,7 @@ export interface GeneratedRequest {
     queryParams: Record<string, any>;
     pathParams: Record<string, any>;
     body?: any;
+    formData?: Record<string, any>;  // New: for form-data
 }
 
 export class ApiRequestGenerator {
@@ -76,7 +77,8 @@ export class ApiRequestGenerator {
             },
             queryParams: {},
             pathParams: {},
-            body: undefined
+            body: undefined,
+            formData: undefined
         };
 
         // Process URL using environment base URL and base path
@@ -109,8 +111,15 @@ export class ApiRequestGenerator {
         const queryString = this.buildQueryString(queryParams);
         request.url = queryString ? `${fullUrl}?${queryString}` : fullUrl;
 
-        // Generate body for POST/PUT methods
-        if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
+        // Check for form parameters
+        const formParams = endpoint.parameters.filter(p => p.source === 'form');
+        if (formParams.length > 0) {
+            // Generate form data
+            request.formData = this.generateFormData(formParams);
+            // Set multipart/form-data header
+            request.headers['Content-Type'] = 'multipart/form-data';
+        } else if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
+            // Generate body for POST/PUT methods
             request.body = this.generateRequestBody(endpoint.parameters);
         }
 
@@ -140,6 +149,26 @@ export class ApiRequestGenerator {
         }
 
         return queryParams;
+    }
+
+    private generateFormData(parameters: ApiParameter[]): Record<string, any> {
+        const formData: Record<string, any> = {};
+
+        for (const param of parameters) {
+            // Check if it's a file parameter
+            if (this.isFileType(param.type)) {
+                formData[param.name] = '[FILE]'; // Placeholder for file
+            } else {
+                formData[param.name] = this.generateSampleValue(param.type, param.name);
+            }
+        }
+
+        return formData;
+    }
+
+    private isFileType(type: string): boolean {
+        const fileTypes = ['IFormFile', 'IFormFileCollection', 'Stream', 'byte[]'];
+        return fileTypes.some(ft => type.includes(ft));
     }
 
     private generateRequestBody(parameters: ApiParameter[]): any {

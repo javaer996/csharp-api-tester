@@ -58,6 +58,50 @@ public class SampleController : ControllerBase
     {
         return Ok($"Complex operation completed");
     }
+
+    // Form data endpoint - Upload single file
+    [HttpPost("upload")]
+    public ActionResult<string> UploadFile([FromForm] IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest("No file uploaded");
+
+        return Ok($"File uploaded: {file.FileName}, Size: {file.Length} bytes");
+    }
+
+    // Form data endpoint - Upload with metadata
+    [HttpPost("upload-with-data")]
+    public ActionResult<string> UploadWithData(
+        [FromForm] IFormFile file,
+        [FromForm] string title,
+        [FromForm] string description)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest("No file uploaded");
+
+        return Ok($"File: {file.FileName}, Title: {title}, Description: {description}");
+    }
+
+    // Form data endpoint - Multiple form fields (no file)
+    [HttpPost("submit-form")]
+    public ActionResult<string> SubmitForm(
+        [FromForm] string username,
+        [FromForm] string email,
+        [FromForm] int age,
+        [FromForm] bool subscribe = false)
+    {
+        return Ok($"Form submitted - Username: {username}, Email: {email}, Age: {age}, Subscribe: {subscribe}");
+    }
+
+    // Form data endpoint - Multiple files
+    [HttpPost("upload-multiple")]
+    public ActionResult<string> UploadMultiple([FromForm] List<IFormFile> files)
+    {
+        if (files == null || files.Count == 0)
+            return BadRequest("No files uploaded");
+
+        return Ok($"Uploaded {files.Count} files");
+    }
 }
 
 public class CreateRequest

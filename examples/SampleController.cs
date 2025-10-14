@@ -110,6 +110,141 @@ namespace WebApiDemo.Controllers
         }
     }
 
+    [ApiController]
+    [Route("api/upload")]
+    public class UploadController : ControllerBase
+    {
+        /// <summary>
+        /// 上传单个文件
+        /// </summary>
+        [HttpPost("single")]
+        public async Task<IActionResult> UploadSingleFile([FromForm] IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest("No file uploaded");
+
+            // Sample implementation
+            return Ok(new
+            {
+                FileName = file.FileName,
+                Size = file.Length,
+                ContentType = file.ContentType
+            });
+        }
+
+        /// <summary>
+        /// 上传文件并带表单数据
+        /// </summary>
+        [HttpPost("with-data")]
+        public async Task<IActionResult> UploadFileWithData(
+            [FromForm] IFormFile file,
+            [FromForm] string title,
+            [FromForm] string description,
+            [FromForm] string category)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest("No file uploaded");
+
+            // Sample implementation
+            return Ok(new
+            {
+                FileName = file.FileName,
+                Size = file.Length,
+                Title = title,
+                Description = description,
+                Category = category
+            });
+        }
+
+        /// <summary>
+        /// 上传多个文件
+        /// </summary>
+        [HttpPost("multiple")]
+        public async Task<IActionResult> UploadMultipleFiles([FromForm] List<IFormFile> files)
+        {
+            if (files == null || files.Count == 0)
+                return BadRequest("No files uploaded");
+
+            // Sample implementation
+            var fileInfos = files.Select(f => new
+            {
+                FileName = f.FileName,
+                Size = f.Length,
+                ContentType = f.ContentType
+            });
+
+            return Ok(fileInfos);
+        }
+
+        /// <summary>
+        /// 上传图片并生成缩略图
+        /// </summary>
+        [HttpPost("image")]
+        public async Task<IActionResult> UploadImage(
+            [FromForm] IFormFile image,
+            [FromForm] int width = 800,
+            [FromForm] int height = 600,
+            [FromForm] bool generateThumbnail = true)
+        {
+            if (image == null || image.Length == 0)
+                return BadRequest("No image uploaded");
+
+            // Sample implementation
+            return Ok(new
+            {
+                FileName = image.FileName,
+                Size = image.Length,
+                Width = width,
+                Height = height,
+                ThumbnailGenerated = generateThumbnail
+            });
+        }
+
+        /// <summary>
+        /// 提交表单数据(无文件)
+        /// </summary>
+        [HttpPost("form-only")]
+        public async Task<IActionResult> SubmitFormData(
+            [FromForm] string username,
+            [FromForm] string email,
+            [FromForm] string phone,
+            [FromForm] int age,
+            [FromForm] bool subscribe = false)
+        {
+            // Sample implementation
+            return Ok(new
+            {
+                Username = username,
+                Email = email,
+                Phone = phone,
+                Age = age,
+                Subscribe = subscribe
+            });
+        }
+
+        /// <summary>
+        /// 上传用户头像
+        /// </summary>
+        [HttpPost("avatar/{userId}")]
+        public async Task<IActionResult> UploadAvatar(
+            int userId,
+            [FromForm] IFormFile avatar,
+            [FromForm] string displayName)
+        {
+            if (avatar == null || avatar.Length == 0)
+                return BadRequest("No avatar uploaded");
+
+            // Sample implementation
+            return Ok(new
+            {
+                UserId = userId,
+                DisplayName = displayName,
+                AvatarFileName = avatar.FileName,
+                AvatarSize = avatar.Length
+            });
+        }
+    }
+
     // DTOs and Models
     public class User
     {

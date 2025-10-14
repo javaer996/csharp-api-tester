@@ -188,16 +188,37 @@ export class ApiTestPanel {
         let result;
 
         try {
-            const config = {
+            const config: any = {
                 method: requestData.method,
                 url: requestData.url,
-                headers: requestData.headers,
+                headers: { ...requestData.headers },
                 timeout: vscode.workspace.getConfiguration('csharpApiTester').get<number>('timeout', 30000)
             };
 
-            // Add body for POST/PUT methods
-            if (['POST', 'PUT', 'PATCH'].includes(requestData.method) && requestData.body) {
-                (config as any).data = requestData.body;
+            // Handle form data or body
+            if (requestData.formData && Object.keys(requestData.formData).length > 0) {
+                // For form data, we need to build a proper form-data payload
+                // Note: File uploads are represented as [FILE] placeholders
+                const FormData = require('form-data');
+                const formDataPayload = new FormData();
+
+                for (const [key, value] of Object.entries(requestData.formData)) {
+                    if (value === '[FILE]') {
+                        // Skip file placeholders for now (would need actual file content)
+                        console.warn(`[ApiTestPanel] File field '${key}' skipped - no file selected`);
+                    } else {
+                        formDataPayload.append(key, value);
+                    }
+                }
+
+                config.data = formDataPayload;
+                // Let form-data set the content-type with boundary
+                config.headers = {
+                    ...config.headers,
+                    ...formDataPayload.getHeaders()
+                };
+            } else if (['POST', 'PUT', 'PATCH'].includes(requestData.method) && requestData.body) {
+                config.data = requestData.body;
             }
 
             console.log(`[ApiTestPanel] Making HTTP request with config:`, config);
@@ -597,6 +618,8 @@ export class ApiTestPanel {
         const queryParamsJson = JSON.stringify(request.queryParams);
         const headersJson = JSON.stringify(request.headers);
         const bodyJson = request.body ? JSON.stringify(request.body, null, 2) : '';
+        const formDataJson = request.formData ? JSON.stringify(request.formData) : '';
+        const hasFormData = !!request.formData;
 
         // Get base URL without query string
         const urlWithoutQuery = request.url.split('?')[0];
@@ -1305,13 +1328,14 @@ export class ApiTestPanel {
         <!-- Request Tabs -->
         <div class="tabs-container">
             <div class="tab-nav">
-                <button class="tab-button ${Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
-                <button class="tab-button ${Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
-                ${request.body ? '<button class="tab-button" onclick="switchTab(\'body\')">Body</button>' : ''}
+                <button class="tab-button ${!request.body && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
+                <button class="tab-button ${!request.body && !hasFormData && Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
+                ${request.body ? '<button class="tab-button active" onclick="switchTab(\'body\')">Body</button>' : ''}
+                ${hasFormData ? '<button class="tab-button active" onclick="switchTab(\'form\')">Form</button>' : ''}
             </div>
 
             <!-- Query Tab -->
-            <div class="tab-content ${Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
+            <div class="tab-content ${!request.body && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
                 <table class="params-table">
                     <thead>
                         <tr>
@@ -1330,7 +1354,7 @@ export class ApiTestPanel {
             </div>
 
             <!-- Headers Tab -->
-            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !request.body ? 'active' : ''}" id="headers-tab">
+            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !request.body && !hasFormData ? 'active' : ''}" id="headers-tab">
                 <table class="params-table">
                     <thead>
                         <tr>
@@ -1350,7 +1374,7 @@ export class ApiTestPanel {
 
             ${request.body ? `
             <!-- Body Tab -->
-            <div class="tab-content" id="body-tab">
+            <div class="tab-content active" id="body-tab">
                 <div class="body-editor">
                     <div class="body-editor-toolbar">
                         <div class="body-editor-toolbar-left">
@@ -1364,6 +1388,28 @@ export class ApiTestPanel {
                     </div>
                     <textarea id="request-body">${bodyJson}</textarea>
                 </div>
+            </div>
+            ` : ''}
+
+            ${hasFormData ? `
+            <!-- Form Tab -->
+            <div class="tab-content active" id="form-tab">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">✓</th>
+                            <th style="width: 25%;">Key</th>
+                            <th style="width: 25%;">Value</th>
+                            <th style="width: 15%;">Type</th>
+                            <th>Description</th>
+                            <th style="width: 80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="form-params-body">
+                        <!-- Will be populated by JavaScript -->
+                    </tbody>
+                </table>
+                <button class="add-param-btn" onclick="addFormField()">+ Add Form Field</button>
             </div>
             ` : ''}
         </div>
@@ -1437,6 +1483,7 @@ export class ApiTestPanel {
         // Initial data
         let queryParams = ${queryParamsJson};
         let headers = ${headersJson};
+        let formData = ${formDataJson || '{}'};
         const baseUrl = '${urlWithoutQuery}';
         let originalJsonBody = ${bodyJson ? `\`${bodyJson}\`` : 'null'}; // Store original JSON
         let currentEditingParam = null; // For value editor
@@ -1445,6 +1492,7 @@ export class ApiTestPanel {
         window.addEventListener('DOMContentLoaded', () => {
             renderQueryParams();
             renderHeaders();
+            renderFormFields();
             updateUrlFromQueryParams();
         });
 
@@ -1487,6 +1535,88 @@ export class ApiTestPanel {
             });
         }
 
+        // Form fields rendering
+        function renderFormFields() {
+            const tbody = document.getElementById('form-params-body');
+            if (!tbody) return; // Form tab may not exist
+
+            tbody.innerHTML = '';
+
+            Object.entries(formData).forEach(([key, value]) => {
+                const row = createFormRow(key, value);
+                tbody.appendChild(row);
+            });
+        }
+
+        // Create form row
+        function createFormRow(key, value) {
+            const tr = document.createElement('tr');
+            const isFile = value === '[FILE]';
+            const fieldType = isFile ? 'file' : 'text';
+
+            tr.innerHTML = \`
+                <td><input type="checkbox" checked onchange="toggleFormField('\${key}')" /></td>
+                <td><input type="text" value="\${key}" onchange="updateFormFieldKey('\${key}', this.value)" /></td>
+                <td style="position: relative;">
+                    \${isFile ?
+                        '<input type="file" onchange="updateFormFieldValue(\\''+key+'\\', this.files[0])" />' :
+                        '<input type="text" value="'+value+'" oninput="updateFormFieldValue(\\''+key+'\\', this.value)" style="padding-right: 30px;" /><span class="expand-icon" onclick="openValueEditor(\\'form\\', \\''+key+'\\', \\''+value+'\\')" title="Expand editor" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%);">⤢</span>'
+                    }
+                </td>
+                <td>
+                    <select onchange="changeFormFieldType('\${key}', this.value)" style="width: 100%; padding: 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 3px;">
+                        <option value="text" \${!isFile ? 'selected' : ''}>Text</option>
+                        <option value="file" \${isFile ? 'selected' : ''}>File</option>
+                    </select>
+                </td>
+                <td><input type="text" placeholder="Description" /></td>
+                <td class="param-actions">
+                    <span class="action-icon" onclick="deleteFormField('\${key}')" title="Delete">🗑️</span>
+                </td>
+            \`;
+            return tr;
+        }
+
+        // Add form field
+        function addFormField() {
+            const newKey = 'new_field';
+            formData[newKey] = '';
+            renderFormFields();
+        }
+
+        // Update form field value
+        function updateFormFieldValue(key, value) {
+            formData[key] = value;
+        }
+
+        // Update form field key
+        function updateFormFieldKey(oldKey, newKey) {
+            formData[newKey] = formData[oldKey];
+            delete formData[oldKey];
+            renderFormFields();
+        }
+
+        // Toggle form field
+        function toggleFormField(key) {
+            // For now, just remove from object if unchecked
+        }
+
+        // Delete form field
+        function deleteFormField(key) {
+            delete formData[key];
+            renderFormFields();
+        }
+
+        // Change form field type
+        function changeFormFieldType(key, type) {
+            if (type === 'file') {
+                formData[key] = '[FILE]';
+            } else {
+                formData[key] = '';
+            }
+            renderFormFields();
+        }
+
         // Create param row
         function createParamRow(key, value, type) {
             const tr = document.createElement('tr');
@@ -1527,6 +1657,8 @@ export class ApiTestPanel {
                 updateUrlFromQueryParams();
             } else if (type === 'header') {
                 headers[key] = newValue;
+            } else if (type === 'form') {
+                formData[key] = newValue;
             }
         }
 
@@ -1731,6 +1863,8 @@ export class ApiTestPanel {
                 renderQueryParams();
             } else if (type === 'header') {
                 renderHeaders();
+            } else if (type === 'form') {
+                renderFormFields();
             }
 
             closeValueEditor();
@@ -1743,13 +1877,25 @@ export class ApiTestPanel {
             const bodyElement = document.getElementById('request-body');
             const body = bodyElement ? bodyElement.value : null;
 
+            // Check if we have form data
+            const hasFormData = Object.keys(formData).length > 0;
+
             try {
                 const requestData = {
                     method: '${endpointMethod}',
                     url: url,
                     headers: headers,
-                    body: body ? JSON.parse(body) : null
+                    body: null,
+                    formData: null
                 };
+
+                // Handle body vs form data
+                if (hasFormData) {
+                    requestData.formData = formData;
+                    requestData.headers['Content-Type'] = 'multipart/form-data';
+                } else if (body) {
+                    requestData.body = JSON.parse(body);
+                }
 
                 // Show loading
                 const responseContainer = document.getElementById('response-container');

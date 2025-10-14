@@ -122,11 +122,11 @@ export class AIService {
         // Enhanced system prompt to ensure single JSON output
         const systemPrompt = `${config.systemPrompt}
 
-CRITICAL INSTRUCTION: You are a JSON generation tool. You MUST return ONLY a single, valid JSON object.
-- No explanations, no comments, no markdown formatting
-- No multiple JSON objects
-- Start with { and end with }
-- Only valid JSON syntax`;
+        CRITICAL INSTRUCTION: You are a JSON generation tool. You MUST return ONLY a single, valid JSON object.
+        - No explanations, no comments, no markdown formatting
+        - No multiple JSON objects
+        - Start with { and end with }
+        - Only valid JSON syntax`;
 
         // Build user prompt with rich context
         let userPrompt = `Generate realistic test data for the following API endpoint:\n\n`;
