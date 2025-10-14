@@ -1,0 +1,116 @@
+{
+  "name": "csharp-api-tester",
+  "displayName": "C# API Tester",
+  "description": "Intelligent C# Web API testing extension with automatic endpoint detection and request generation",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Testing",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "csharp",
+    "api",
+    "testing",
+    "webapi",
+    "aspnet",
+    "rest"
+  ],
+  "activationEvents": [
+    "onLanguage:csharp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "csharpApiTester.testApi",
+        "title": "C#HttpRequest: Test API Endpoint"
+      },
+      {
+        "command": "csharpApiTester.configureBaseUrl",
+        "title": "C#HttpRequest: Configure API Base URL"
+      },
+      {
+        "command": "csharpApiTester.showApiTestPanel",
+        "title": "C#HttpRequest: Show API Test Panel"
+      },
+      {
+        "command": "csharpApiTester.debugApiDetection",
+        "title": "C#HttpRequest: Debug API Detection"
+      },
+      {
+        "command": "csharpApiTester.manageEnvironments",
+        "title": "C#HttpRequest: Manage API Environments"
+      },
+      {
+        "command": "csharpApiTester.switchEnvironment",
+        "title": "C#HttpRequest: Switch Environment"
+      },
+      {
+        "command": "csharpApiTester.openEnvironmentManager",
+        "title": "C#HttpRequest: Environment Manager",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "csharpApiTester.testDebug",
+        "title": "C#HttpRequest: Test Debug"
+      }
+    ],
+    "configuration": {
+      "title": "C# API Tester",
+      "properties": {
+        "csharpApiTester.environments": {
+          "type": "array",
+          "default": [
+            {
+              "name": "Development",
+              "baseUrl": "http://localhost:5000",
+              "basePath": "/api",
+              "headers": {
+                "Content-Type": "application/json"
+              },
+              "active": true
+            },
+            {
+              "name": "Staging",
+              "baseUrl": "https://staging.example.com",
+              "basePath": "/api",
+              "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer your-token"
+              },
+              "active": false
+            }
+          ],
+          "description": "API environments configuration"
+        },
+        "csharpApiTester.currentEnvironment": {
+          "type": "string",
+          "default": "Development",
+          "description": "Currently active environment name"
+        },
+        "csharpApiTester.timeout": {
+          "type": "number",
+          "default": 30000,
+          "description": "Request timeout in milliseconds"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "18.x",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
