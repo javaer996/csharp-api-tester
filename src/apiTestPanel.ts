@@ -167,6 +167,9 @@ export class ApiTestPanel {
             return;
         }
 
+        // Show loading HTML first to avoid black screen
+        this._panel.webview.html = this.getLoadingHtml(this._currentEndpoint);
+
         // ⚡ LAZY LOADING: Parse class definitions here (when user opens test panel)
         // This dramatically improves CodeLens performance
         await this.parseEndpointClassDefinitions();
@@ -753,6 +756,63 @@ export class ApiTestPanel {
                     <h2>⚠️ No Environment Configured</h2>
                     <p>No API environment is currently configured.</p>
                     <p>Please set up an environment before testing APIs.</p>
+                </div>
+            </body>
+            </html>
+        `;
+    }
+
+    private getLoadingHtml(endpoint: ApiEndpointInfo): string {
+        return `
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Loading...</title>
+                <style>
+                    body {
+                        font-family: var(--vscode-font-family);
+                        color: var(--vscode-foreground);
+                        background-color: var(--vscode-editor-background);
+                        padding: 20px;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        height: 100vh;
+                        margin: 0;
+                    }
+                    .loading-container {
+                        text-align: center;
+                    }
+                    .loading-spinner {
+                        border: 4px solid var(--vscode-editor-inactiveSelectionBackground);
+                        border-top: 4px solid #49CC90;
+                        border-radius: 50%;
+                        width: 50px;
+                        height: 50px;
+                        animation: spin 1s linear infinite;
+                        margin: 0 auto 20px;
+                    }
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                    .loading-text {
+                        font-size: 16px;
+                        margin-bottom: 10px;
+                    }
+                    .loading-subtitle {
+                        font-size: 13px;
+                        color: var(--vscode-descriptionForeground);
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <div class="loading-text">⚡ 正在解析参数...</div>
+                    <div class="loading-subtitle">${endpoint.method} ${endpoint.route}</div>
                 </div>
             </body>
             </html>
