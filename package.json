@@ -96,6 +96,47 @@
           "type": "number",
           "default": 30000,
           "description": "Request timeout in milliseconds"
+        },
+        "csharpApiTester.ai.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable AI-powered JSON value generation"
+        },
+        "csharpApiTester.ai.provider": {
+          "type": "string",
+          "default": "openai",
+          "enum": ["openai", "azure-openai", "custom"],
+          "description": "AI provider type"
+        },
+        "csharpApiTester.ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for AI service"
+        },
+        "csharpApiTester.ai.endpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions",
+          "description": "AI API endpoint URL"
+        },
+        "csharpApiTester.ai.model": {
+          "type": "string",
+          "default": "gpt-3.5-turbo",
+          "description": "AI model name"
+        },
+        "csharpApiTester.ai.maxTokens": {
+          "type": "number",
+          "default": 1000,
+          "description": "Maximum tokens for AI generation"
+        },
+        "csharpApiTester.ai.systemPrompt": {
+          "type": "string",
+          "default": "You are a professional API testing assistant. Generate realistic and contextually appropriate test data based on the API endpoint information and code context provided.",
+          "description": "System prompt for AI generation"
+        },
+        "csharpApiTester.globalHeaders": {
+          "type": "object",
+          "default": {},
+          "description": "Global headers applied to all requests"
         }
       }
     }

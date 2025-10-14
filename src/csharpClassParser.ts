@@ -171,6 +171,62 @@ export class CSharpClassParser {
     }
 
     /**
+     * Get the full class definition as text (including properties and their comments)
+     * @param document The text document to search in
+     * @param className The name of the class to find
+     * @returns The full class definition text, or null if not found
+     */
+    getClassDefinitionText(document: vscode.TextDocument, className: string): string | null {
+        const text = document.getText();
+        const lines = text.split('\n');
+
+        console.log(`[CSharpClassParser] Getting full definition for class: ${className}`);
+
+        // Find the class definition
+        const classLineIndex = this.findClassDefinition(lines, className);
+        if (classLineIndex === -1) {
+            console.log(`[CSharpClassParser] Class ${className} not found in document`);
+            return null;
+        }
+
+        let braceCount = 0;
+        let inClass = false;
+        let classDefinition = '';
+        let startIndex = Math.max(0, classLineIndex - 10); // Include comments above class
+
+        // Start from before the class line to capture comments
+        for (let i = startIndex; i < lines.length; i++) {
+            const line = lines[i];
+
+            // Add line to definition
+            if (i >= classLineIndex - 5) { // Start capturing 5 lines before class
+                classDefinition += line + '\n';
+            }
+
+            // Count braces only after we reach the class line
+            if (i >= classLineIndex) {
+                for (const char of line) {
+                    if (char === '{') {
+                        braceCount++;
+                        if (!inClass) inClass = true;
+                    }
+                    if (char === '}') {
+                        braceCount--;
+                    }
+                }
+
+                // If we've exited the class, stop
+                if (inClass && braceCount === 0) {
+                    break;
+                }
+            }
+        }
+
+        console.log(`[CSharpClassParser] Captured ${classDefinition.split('\n').length} lines for ${className}`);
+        return classDefinition.trim();
+    }
+
+    /**
      * Check if a type is a simple/primitive type
      */
     isSimpleType(type: string): boolean {

@@ -19,6 +19,7 @@ export interface ApiParameter {
     required: boolean;
     constraint?: string;
     properties?: ClassProperty[];  // For complex types, store class properties
+    classDefinition?: string;      // Full class definition with comments
 }
 
 export class ApiEndpointDetector {
@@ -381,6 +382,13 @@ export class ApiEndpointDetector {
                 console.log(`[C# API Detector] Added ${properties.length} properties to parameter ${name}`);
             } else {
                 console.log(`[C# API Detector] No properties found for type ${type}, will use generic generation`);
+            }
+
+            // Also get the full class definition text for AI context
+            const classDefinition = this.classParser.getClassDefinitionText(document, type);
+            if (classDefinition) {
+                apiParam.classDefinition = classDefinition;
+                console.log(`[C# API Detector] Added full class definition for ${type}`);
             }
         }
 

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ApiEndpointInfo } from './apiEndpointDetector';
 import { ApiRequestGenerator, GeneratedRequest } from './apiRequestGenerator';
 import { EnvironmentManager, Environment } from './environmentManager';
+import { AIService } from './aiService';
 import axios, { AxiosError } from 'axios';
 
 export class ApiTestPanel {
@@ -14,7 +15,9 @@ export class ApiTestPanel {
     private _currentEndpoint: ApiEndpointInfo | undefined;
     private _requestGenerator: ApiRequestGenerator;
     private _environmentManager: EnvironmentManager;
+    private _aiService: AIService;
     private _panelKey: string;
+    private _lastAIConversation: any | null = null; // Store conversation for this panel
 
     public static createOrShow(extensionUri: vscode.Uri, endpoint?: ApiEndpointInfo) {
         const column = vscode.window.activeTextEditor
@@ -70,6 +73,7 @@ export class ApiTestPanel {
         this._panelKey = panelKey;
         this._requestGenerator = new ApiRequestGenerator();
         this._environmentManager = EnvironmentManager.getInstance();
+        this._aiService = AIService.getInstance();
 
         // Set the webview's initial html content
         this.updateContent();
@@ -110,6 +114,22 @@ export class ApiTestPanel {
                         case 'manageEnvironments':
                             console.log(`[ApiTestPanel] 📁 Processing manageEnvironments`);
                             await this.openEnvironmentManagement();
+                            break;
+                        case 'generateWithAI':
+                            console.log(`[ApiTestPanel] 🤖 Processing AI generation`);
+                            await this.generateWithAI(message.data);
+                            break;
+                        case 'openSettings':
+                            console.log(`[ApiTestPanel] ⚙️ Processing openSettings`);
+                            await this.openSettings();
+                            break;
+                        case 'viewAIConversation':
+                            console.log(`[ApiTestPanel] 💬 Processing viewAIConversation`);
+                            await this.viewAIConversation();
+                            break;
+                        case 'restoreOriginalJson':
+                            console.log(`[ApiTestPanel] 🔄 Processing restoreOriginalJson`);
+                            this.restoreOriginalJson();
                             break;
                         default:
                             console.log(`[ApiTestPanel] ❓ Unknown message type:`, message.type);
@@ -338,6 +358,137 @@ export class ApiTestPanel {
         await vscode.commands.executeCommand('csharpApiTester.manageEnvironments');
     }
 
+    private async generateWithAI(data: { jsonTemplate: string }): Promise<void> {
+        if (!this._currentEndpoint) {
+            this._panel.webview.postMessage({
+                type: 'aiGenerationResult',
+                result: {
+                    success: false,
+                    error: 'No endpoint information available'
+                }
+            });
+            return;
+        }
+
+        try {
+            // Check if AI is configured
+            if (!this._aiService.isConfigured()) {
+                this._panel.webview.postMessage({
+                    type: 'aiGenerationResult',
+                    result: {
+                        success: false,
+                        error: 'AI is not configured. Please configure AI settings first.'
+                    }
+                });
+                return;
+            }
+
+            console.log('[ApiTestPanel] Generating JSON with AI...');
+            console.log('[ApiTestPanel] Template:', data.jsonTemplate);
+
+            // Build rich API context
+            const apiContext: any = {
+                method: this._currentEndpoint.method,
+                route: this._currentEndpoint.route,
+                methodSignature: `${this._currentEndpoint.returnType} ${this._currentEndpoint.methodName}`,
+                returnType: this._currentEndpoint.returnType,
+                parameters: this._currentEndpoint.parameters.map(p =>
+                    `${p.type} ${p.name}${p.source === 'body' ? ' [FromBody]' : p.source === 'query' ? ' [FromQuery]' : ''}`
+                ),
+                comments: [],
+                classProperties: [],
+                classDefinitions: []  // New: full class definitions
+            };
+
+            // Add class properties and definitions if available (for body parameters)
+            const bodyParam = this._currentEndpoint.parameters.find(p => p.source === 'body');
+            if (bodyParam) {
+                if (bodyParam.properties) {
+                    apiContext.classProperties = bodyParam.properties;
+                }
+                if (bodyParam.classDefinition) {
+                    apiContext.classDefinitions.push({
+                        className: bodyParam.type,
+                        definition: bodyParam.classDefinition
+                    });
+                }
+            }
+
+            // Generate with AI
+            const generatedJson = await this._aiService.generateSmartJson(
+                data.jsonTemplate || null,
+                apiContext
+            );
+
+            console.log('[ApiTestPanel] AI generated:', generatedJson);
+
+            // Store conversation for this panel
+            const globalConversation = this._aiService.getLastConversation();
+            if (globalConversation) {
+                this._lastAIConversation = {
+                    systemPrompt: globalConversation.systemPrompt,
+                    userPrompt: globalConversation.userPrompt,
+                    aiResponse: globalConversation.aiResponse,
+                    timestamp: globalConversation.timestamp
+                };
+            }
+
+            // Send result back to webview
+            this._panel.webview.postMessage({
+                type: 'aiGenerationResult',
+                result: {
+                    success: true,
+                    data: generatedJson
+                }
+            });
+
+        } catch (error: any) {
+            console.error('[ApiTestPanel] AI generation failed:', error);
+            this._panel.webview.postMessage({
+                type: 'aiGenerationResult',
+                result: {
+                    success: false,
+                    error: error.message || 'AI generation failed'
+                }
+            });
+        }
+    }
+
+    private async openSettings(): Promise<void> {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'csharpApiTester');
+    }
+
+    private async viewAIConversation(): Promise<void> {
+        // Use this panel's stored conversation instead of global
+        const conversation = this._lastAIConversation;
+
+        if (!conversation) {
+            this._panel.webview.postMessage({
+                type: 'aiConversationData',
+                conversation: null
+            });
+            return;
+        }
+
+        // Send conversation data to webview
+        this._panel.webview.postMessage({
+            type: 'aiConversationData',
+            conversation: {
+                systemPrompt: conversation.systemPrompt,
+                userPrompt: conversation.userPrompt,
+                aiResponse: conversation.aiResponse,
+                timestamp: conversation.timestamp
+            }
+        });
+    }
+
+    private restoreOriginalJson(): void {
+        // Send message to webview to restore original JSON
+        this._panel.webview.postMessage({
+            type: 'restoreOriginalJsonData'
+        });
+    }
+
     private getWelcomeHtml(): string {
         return `
             <!DOCTYPE html>
@@ -549,6 +700,22 @@ export class ApiTestPanel {
             background: #35A56D;
         }
 
+        .settings-button {
+            padding: 10px 15px;
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .settings-button:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+
         /* Tab Navigation */
         .tabs-container {
             flex: 1;
@@ -686,19 +853,45 @@ export class ApiTestPanel {
         /* Body Editor */
         .body-editor {
             height: 400px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .body-editor-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border: 1px solid var(--vscode-input-border);
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .body-editor-toolbar-left {
+            display: flex;
+            gap: 6px;
+        }
+
+        .body-editor-toolbar-right {
+            display: flex;
+            gap: 6px;
         }
 
         .body-editor textarea {
             width: 100%;
-            height: 100%;
+            flex: 1;
             padding: 15px;
             border: 1px solid var(--vscode-input-border);
+            border-top: none;
             background-color: var(--vscode-textCodeBlock-background);
             color: var(--vscode-editor-foreground);
-            border-radius: 4px;
+            border-radius: 0 0 4px 4px;
             font-family: 'Consolas', 'Monaco', monospace;
             font-size: 13px;
             resize: vertical;
+            line-height: 1.5;
         }
 
         .body-editor textarea:focus {
@@ -706,22 +899,242 @@ export class ApiTestPanel {
             border-color: #49CC90;
         }
 
-        .format-button {
-            position: absolute;
-            top: 25px;
-            right: 25px;
+        /* JSON Syntax Highlighting */
+        .json-key { color: #9CDCFE; }
+        .json-string { color: #CE9178; }
+        .json-number { color: #B5CEA8; }
+        .json-boolean { color: #569CD6; }
+        .json-null { color: #569CD6; }
+
+        .format-button, .ai-button {
             background: var(--vscode-button-secondaryBackground);
             color: var(--vscode-button-secondaryForeground);
             border: none;
-            padding: 6px 12px;
+            padding: 4px 10px;
             border-radius: 3px;
-            font-size: 11px;
+            font-size: 12px;
             cursor: pointer;
-            z-index: 10;
+            transition: all 0.2s;
         }
 
-        .format-button:hover {
+        .format-button:hover, .ai-button:hover {
             background: var(--vscode-button-secondaryHoverBackground);
+        }
+
+        .ai-button {
+            background: #9b59b6;
+            color: white;
+            font-weight: 500;
+        }
+
+        .ai-button:hover {
+            background: #8e44ad;
+        }
+
+        .ai-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .view-conversation-button {
+            background: transparent;
+            color: var(--vscode-foreground);
+            border: 1px solid var(--vscode-button-border);
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            opacity: 0.8;
+        }
+
+        .view-conversation-button:hover {
+            opacity: 1;
+            background: var(--vscode-button-secondaryBackground);
+        }
+
+        .restore-button {
+            background: transparent;
+            color: var(--vscode-foreground);
+            border: 1px solid var(--vscode-button-border);
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            opacity: 0.8;
+        }
+
+        .restore-button:hover {
+            opacity: 1;
+            background: var(--vscode-button-secondaryBackground);
+        }
+
+        /* Modal Dialog */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.visible {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            width: 80%;
+            max-width: 800px;
+            max-height: 80%;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            color: var(--vscode-foreground);
+            font-size: 18px;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.7;
+        }
+
+        .modal-close:hover {
+            opacity: 1;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .conversation-section {
+            margin-bottom: 25px;
+        }
+
+        .conversation-section h3 {
+            color: #49CC90;
+            font-size: 14px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .conversation-section pre {
+            background: var(--vscode-textCodeBlock-background);
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .conversation-timestamp {
+            color: var(--vscode-descriptionForeground);
+            font-size: 12px;
+            margin-bottom: 15px;
+        }
+
+        /* Value Editor Modal */
+        .value-editor-modal {
+            width: 90%;
+            max-width: 600px;
+        }
+
+        .value-editor-modal textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 10px;
+            border: 1px solid var(--vscode-input-border);
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            resize: vertical;
+            border-radius: 4px;
+        }
+
+        .value-editor-modal textarea:focus {
+            outline: none;
+            border-color: #49CC90;
+        }
+
+        .value-editor-actions {
+            margin-top: 15px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .value-editor-actions button {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .value-editor-save {
+            background: #49CC90;
+            color: white;
+        }
+
+        .value-editor-save:hover {
+            background: #3DB87C;
+        }
+
+        .value-editor-cancel {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+
+        .value-editor-cancel:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+
+        .expand-icon {
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+            font-size: 14px;
+            margin-left: 4px;
+        }
+
+        .expand-icon:hover {
+            opacity: 1;
         }
 
         /* Response Container */
@@ -854,6 +1267,29 @@ export class ApiTestPanel {
         ::-webkit-scrollbar-thumb:hover {
             background: var(--vscode-scrollbarSlider-hoverBackground);
         }
+
+        /* Notification Animations */
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
     </style>
 </head>
 <body>
@@ -863,6 +1299,7 @@ export class ApiTestPanel {
             <span class="method-badge ${methodClass}">${endpointMethod}</span>
             <input type="text" class="url-input" id="fullUrl" value="${request.url}" />
             <button class="send-button" onclick="sendRequest()">Send</button>
+            <button class="settings-button" onclick="openSettings()" title="Settings">⚙️</button>
         </div>
 
         <!-- Request Tabs -->
@@ -914,8 +1351,17 @@ export class ApiTestPanel {
             ${request.body ? `
             <!-- Body Tab -->
             <div class="tab-content" id="body-tab">
-                <div class="body-editor" style="position: relative;">
-                    <button class="format-button" onclick="formatBodyJson()">Format JSON</button>
+                <div class="body-editor">
+                    <div class="body-editor-toolbar">
+                        <div class="body-editor-toolbar-left">
+                            <button class="restore-button" onclick="restoreOriginalJson()" title="Restore Original JSON">↺ Restore</button>
+                            <button class="view-conversation-button" onclick="viewAIConversation()" title="View AI Conversation">💬 View AI</button>
+                        </div>
+                        <div class="body-editor-toolbar-right">
+                            <button class="format-button" onclick="formatBodyJson()" title="Format JSON">{ } Format</button>
+                            <button class="ai-button" onclick="generateWithAI()" id="ai-button" title="AI Smart Generation">🤖 AI Generate</button>
+                        </div>
+                    </div>
                     <textarea id="request-body">${bodyJson}</textarea>
                 </div>
             </div>
@@ -954,6 +1400,36 @@ export class ApiTestPanel {
         </div>
     </div>
 
+    <!-- AI Conversation Modal -->
+    <div class="modal-overlay" id="conversation-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>AI Conversation</h2>
+                <button class="modal-close" onclick="closeConversationModal()">×</button>
+            </div>
+            <div class="modal-body" id="conversation-modal-body">
+                <div class="empty-state">No AI conversation available yet.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Value Editor Modal -->
+    <div class="modal-overlay" id="value-editor-modal">
+        <div class="modal-content value-editor-modal">
+            <div class="modal-header">
+                <h2 id="value-editor-title">Edit Value</h2>
+                <button class="modal-close" onclick="closeValueEditor()">×</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="value-editor-textarea"></textarea>
+                <div class="value-editor-actions">
+                    <button class="value-editor-cancel" onclick="closeValueEditor()">Cancel</button>
+                    <button class="value-editor-save" onclick="saveValueFromEditor()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Initialize VS Code API
         const vscode = acquireVsCodeApi();
@@ -962,6 +1438,8 @@ export class ApiTestPanel {
         let queryParams = ${queryParamsJson};
         let headers = ${headersJson};
         const baseUrl = '${urlWithoutQuery}';
+        let originalJsonBody = ${bodyJson ? `\`${bodyJson}\`` : 'null'}; // Store original JSON
+        let currentEditingParam = null; // For value editor
 
         // Initialize on load
         window.addEventListener('DOMContentLoaded', () => {
@@ -1015,7 +1493,10 @@ export class ApiTestPanel {
             tr.innerHTML = \`
                 <td><input type="checkbox" checked onchange="toggleParam('\${type}', '\${key}')" /></td>
                 <td><input type="text" value="\${key}" onchange="updateParamKey('\${type}', '\${key}', this.value)" /></td>
-                <td><input type="text" value="\${value}" oninput="updateParamValue('\${type}', '\${key}', this.value)" /></td>
+                <td style="position: relative;">
+                    <input type="text" value="\${value}" oninput="updateParamValue('\${type}', '\${key}', this.value)" style="padding-right: 30px;" />
+                    <span class="expand-icon" onclick="openValueEditor('\${type}', '\${key}', '\${value}')" title="Expand editor" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%);">⤢</span>
+                </td>
                 <td><input type="text" placeholder="Description" /></td>
                 <td class="param-actions">
                     <span class="action-icon" onclick="deleteParam('\${type}', '\${key}')" title="Delete">🗑️</span>
@@ -1118,6 +1599,144 @@ export class ApiTestPanel {
             }
         }
 
+        // Generate with AI
+        function generateWithAI() {
+            const textarea = document.getElementById('request-body');
+            const aiButton = document.getElementById('ai-button');
+            const currentJson = textarea.value;
+
+            // Validate JSON first
+            try {
+                JSON.parse(currentJson);
+            } catch (error) {
+                alert('Please provide valid JSON template first: ' + error.message);
+                return;
+            }
+
+            // Disable button and show loading
+            aiButton.disabled = true;
+            aiButton.textContent = '🤖 AI Generating...';
+
+            // Send to backend
+            vscode.postMessage({
+                type: 'generateWithAI',
+                data: {
+                    jsonTemplate: currentJson
+                }
+            });
+        }
+
+        // View AI conversation
+        function viewAIConversation() {
+            vscode.postMessage({
+                type: 'viewAIConversation'
+            });
+        }
+
+        // Restore original JSON
+        function restoreOriginalJson() {
+            if (!originalJsonBody) {
+                alert('No original JSON template available');
+                return;
+            }
+
+            const textarea = document.getElementById('request-body');
+            if (textarea) {
+                textarea.value = originalJsonBody;
+                showNotification('✅ Original JSON restored', 'success');
+            }
+        }
+
+        // Close conversation modal
+        function closeConversationModal() {
+            const modal = document.getElementById('conversation-modal');
+            modal.classList.remove('visible');
+        }
+
+        // Display AI conversation in modal
+        function displayAIConversation(conversation) {
+            const modal = document.getElementById('conversation-modal');
+            const modalBody = document.getElementById('conversation-modal-body');
+
+            if (!conversation) {
+                modalBody.innerHTML = '<div class="empty-state">No AI conversation available yet.</div>';
+            } else {
+                const timestamp = new Date(conversation.timestamp).toLocaleString();
+                modalBody.innerHTML = \`
+                    <div class="conversation-timestamp">Generated at: \${timestamp}</div>
+
+                    <div class="conversation-section">
+                        <h3>System Prompt</h3>
+                        <pre>\${conversation.systemPrompt}</pre>
+                    </div>
+
+                    <div class="conversation-section">
+                        <h3>User Prompt (Sent to AI)</h3>
+                        <pre>\${conversation.userPrompt}</pre>
+                    </div>
+
+                    <div class="conversation-section">
+                        <h3>AI Response</h3>
+                        <pre>\${conversation.aiResponse}</pre>
+                    </div>
+                \`;
+            }
+
+            modal.classList.add('visible');
+        }
+
+        // Open settings
+        function openSettings() {
+            vscode.postMessage({
+                type: 'openSettings'
+            });
+        }
+
+        // Open value editor
+        function openValueEditor(type, key, value) {
+            currentEditingParam = { type, key, value };
+
+            const modal = document.getElementById('value-editor-modal');
+            const textarea = document.getElementById('value-editor-textarea');
+            const title = document.getElementById('value-editor-title');
+
+            title.textContent = \`Edit Value: \${key}\`;
+            textarea.value = value || '';
+            textarea.focus();
+
+            modal.classList.add('visible');
+        }
+
+        // Close value editor
+        function closeValueEditor() {
+            const modal = document.getElementById('value-editor-modal');
+            modal.classList.remove('visible');
+            currentEditingParam = null;
+        }
+
+        // Save value from editor
+        function saveValueFromEditor() {
+            if (!currentEditingParam) return;
+
+            const textarea = document.getElementById('value-editor-textarea');
+            const newValue = textarea.value;
+
+            const { type, key } = currentEditingParam;
+
+            // Update the value
+            updateParamValue(type, key, newValue);
+
+            // Re-render the appropriate table
+            if (type === 'query') {
+                renderQueryParams();
+            } else if (type === 'header') {
+                renderHeaders();
+            }
+
+            closeValueEditor();
+            showNotification('✅ Value updated', 'success');
+        }
+
         // Send request
         function sendRequest() {
             const url = document.getElementById('fullUrl').value;
@@ -1152,8 +1771,68 @@ export class ApiTestPanel {
 
             if (message.type === 'testResult') {
                 displayResponse(message.result);
+            } else if (message.type === 'aiGenerationResult') {
+                handleAIGenerationResult(message.result);
+            } else if (message.type === 'aiConversationData') {
+                displayAIConversation(message.conversation);
+            } else if (message.type === 'restoreOriginalJsonData') {
+                // This is handled by the restoreOriginalJson function directly
             }
         });
+
+        // Handle AI generation result
+        function handleAIGenerationResult(result) {
+            const aiButton = document.getElementById('ai-button');
+            const textarea = document.getElementById('request-body');
+
+            // Re-enable button
+            aiButton.disabled = false;
+            aiButton.textContent = '🤖 AI Generate';
+
+            if (result.success) {
+                // Update textarea with AI generated JSON
+                textarea.value = result.data;
+
+                // Format it
+                try {
+                    const parsed = JSON.parse(result.data);
+                    textarea.value = JSON.stringify(parsed, null, 2);
+                } catch (e) {
+                    // Already formatted or invalid
+                }
+
+                // Show success message
+                showNotification('✨ AI generated successfully!', 'success');
+            } else {
+                // Show error
+                showNotification('❌ ' + result.error, 'error');
+            }
+        }
+
+        // Show notification
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.style.cssText = \`
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 20px;
+                border-radius: 4px;
+                background: \${type === 'success' ? '#49CC90' : '#F93E3E'};
+                color: white;
+                font-size: 14px;
+                z-index: 1000;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+                animation: slideIn 0.3s ease-out;
+            \`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
 
         // Display response
         function displayResponse(result) {

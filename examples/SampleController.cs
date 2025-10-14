@@ -121,9 +121,12 @@ namespace WebApiDemo.Controllers
     }
 
     public class CreateUserDto
-    {
+    {   
+        // 姓名
         public string Name { get; set; } = string.Empty;
+        // 邮箱
         public string Email { get; set; } = string.Empty;
+        // 密码
         public string Password { get; set; } = string.Empty;
     }
 
@@ -135,17 +138,25 @@ namespace WebApiDemo.Controllers
 
     public class Product
     {
+        // id
         public int Id { get; set; }
+        // 商品名
         public string Name { get; set; } = string.Empty;
+        // 类别
         public string Category { get; set; } = string.Empty;
+        // 价格
         public decimal Price { get; set; }
+        // 是否可用
         public bool IsAvailable { get; set; }
     }
 
     public class CreateProductDto
     {
+        // 商品名
         public string Name { get; set; } = string.Empty;
+        // 类别
         public string Category { get; set; } = string.Empty;
+        // 价格
         public decimal Price { get; set; }
     }
 
