@@ -33,27 +33,21 @@ export class ApiEndpointDetector {
         this.classParser = new CSharpClassParser();
     }
 
-    detectApiEndpoints(document: vscode.TextDocument): ApiEndpointInfo[] {
+    async detectApiEndpoints(document: vscode.TextDocument): Promise<ApiEndpointInfo[]> {
         const endpoints: ApiEndpointInfo[] = [];
         const text = document.getText();
         const lines = text.split('\n');
 
-        console.log(`[C# API Detector] Starting analysis of ${lines.length} lines`);
-        console.log(`[C# API Detector] Document language: ${document.languageId}`);
+        console.log(`[C# API Detector] Analyzing controller file: ${document.fileName}`);
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
 
-            console.log(`[C# API Detector] Line ${i}: "${line}"`);
-
             // Look for controller class
             if (this.isControllerClass(line)) {
-                console.log(`[C# API Detector] Found controller class at line ${i}`);
                 const controllerInfo = this.parseController(line);
                 const controllerRoute = this.extractControllerRoute(lines, i);
-
-                console.log(`[C# API Detector] Controller info:`, controllerInfo);
-                console.log(`[C# API Detector] Controller route:`, controllerRoute);
+                console.log(`[C# API Detector] Found controller '${controllerInfo.name}' with route '${controllerRoute}'`);
 
                 // Find API methods in this controller
                 let braceCount = 0;
@@ -80,13 +74,10 @@ export class ApiEndpointDetector {
                     }
 
                     const trimmedLine = methodLine.trim();
-                    console.log(`[C# API Detector] Checking method line ${j}: "${trimmedLine}" (brace count: ${braceCount})`);
 
                     if (this.hasHttpMethodAttribute(trimmedLine)) {
-                        console.log(`[C# API Detector] Found HTTP method attribute at line ${j}`);
-                        const methodInfo = this.parseApiMethod(document, lines, j, controllerInfo, controllerRoute);
+                        const methodInfo = await this.parseApiMethod(document, lines, j, controllerInfo, controllerRoute);
                         if (methodInfo) {
-                            console.log(`[C# API Detector] Parsed method: ${methodInfo.method} ${methodInfo.route}`);
                             endpoints.push(methodInfo);
                         }
                     }
@@ -95,15 +86,14 @@ export class ApiEndpointDetector {
             }
         }
 
+        console.log(`[C# API Detector] ✅ Found ${endpoints.length} endpoints`);
         return endpoints;
     }
 
     private isControllerClass(line: string): boolean {
         const hasClassKeyword = line.includes('class');
         const hasControllerPattern = /Controller/.test(line);
-        const result = hasClassKeyword && hasControllerPattern;
-        console.log(`[C# API Detector] isControllerClass("${line}"): ${result} (hasClass: ${hasClassKeyword}, hasController: ${hasControllerPattern})`);
-        return result;
+        return hasClassKeyword && hasControllerPattern;
     }
 
     private parseController(line: string): { name: string; routePrefix?: string } {
@@ -133,7 +123,6 @@ export class ApiEndpointDetector {
             const routeMatch = line.match(/\[Route\("([^"]+)"\)\]/);
             if (routeMatch) {
                 controllerRoute = routeMatch[1];
-                console.log(`[C# API Detector] Found controller route: ${controllerRoute}`);
                 break;
             }
         }
@@ -141,30 +130,17 @@ export class ApiEndpointDetector {
         return controllerRoute;
     }
 
-    private isClassEnd(line: string): boolean {
-        // This method is flawed - it should detect when a class definition ends, not starts
-        // For now, let's return false tosee the full class content
-        const hasClassKeyword = line.includes('class ');
-        const hasOpeningBrace = line.includes('{');
-        console.log(`[C# API Detector] isClassEnd("${line}"): ${hasClassKeyword && hasOpeningBrace}`);
-        return hasClassKeyword && hasOpeningBrace;
-    }
-
     private hasHttpMethodAttribute(line: string): boolean {
-        const result = this.httpMethodAttributes.some(attr => line.includes(`[${attr}`));
-        console.log(`[C# API Detector] hasHttpMethodAttribute("${line}"): ${result}`);
-        return result;
+        return this.httpMethodAttributes.some(attr => line.includes(`[${attr}`));
     }
 
-    private parseApiMethod(document: vscode.TextDocument, lines: string[], startLine: number, controllerInfo: any, controllerRoute: string): ApiEndpointInfo | null {
+    private async parseApiMethod(document: vscode.TextDocument, lines: string[], startLine: number, controllerInfo: any, controllerRoute: string): Promise<ApiEndpointInfo | null> {
         let currentLine = startLine;
         let httpMethod = '';
         let routeTemplate = '';
         let methodSignature = '';
         let methodName = '';
         let returnType = '';
-
-        console.log(`[C# API Detector] Starting to parse API method at line ${startLine}`);
 
         // Parse attributes
         while (currentLine < lines.length) {
@@ -233,7 +209,7 @@ export class ApiEndpointDetector {
         }
 
         // Parse parameters
-        const parameters = this.parseParameters(document, methodSignature);
+        const parameters = await this.parseParameters(document, methodSignature);
 
         // Build complete route
         let route = '';
@@ -272,7 +248,7 @@ export class ApiEndpointDetector {
         };
     }
 
-    private parseParameters(document: vscode.TextDocument, methodSignature: string): ApiParameter[] {
+    private async parseParameters(document: vscode.TextDocument, methodSignature: string): Promise<ApiParameter[]> {
         const parameters: ApiParameter[] = [];
 
         // Extract parameter list
@@ -285,7 +261,7 @@ export class ApiEndpointDetector {
         const paramList = this.splitParameters(paramString);
 
         for (const param of paramList) {
-            const paramInfo = this.parseSingleParameter(document, param.trim());
+            const paramInfo = await this.parseSingleParameter(document, param.trim());
             if (paramInfo) {
                 parameters.push(paramInfo);
             }
@@ -323,28 +299,17 @@ export class ApiEndpointDetector {
         return parameters;
     }
 
-    private parseSingleParameter(document: vscode.TextDocument, param: string): ApiParameter | null {
-        // Parse parameter with potential attributes
-        const parts = param.split(' ');
-        if (parts.length < 2) {
-            return null;
-        }
+    private async parseSingleParameter(document: vscode.TextDocument, param: string): Promise<ApiParameter | null> {
+        console.log(`[C# API Detector] 🔍 Parsing parameter: "${param}"`);
 
+        // Parse parameter with potential attributes
         let type = '';
         let name = '';
         let source: 'path' | 'query' | 'body' | 'header' | 'form' = 'query';
         let required = false;
 
-        // Find parameter name (last word before potential default value)
-        const nameMatch = param.match(/(\w+)\s*(?:=|$)/);
-        name = nameMatch ? nameMatch[1] : '';
-
-        // Determine type (everything before the name, excluding attributes)
-        const typeMatch = param.match(/\b(\w+[\w<>?\[\]]*)\s+\w+(?:\s*[=,]|$)/);
-        type = typeMatch ? typeMatch[1] : 'object';
-
-        // Determine parameter source based on type and naming conventions
-        if (param.includes('[FromRoute]') || name.toLowerCase().includes('id')) {
+        // Step 1: Detect parameter source from attributes
+        if (param.includes('[FromRoute]')) {
             source = 'path';
             required = true;
         } else if (param.includes('[FromBody]')) {
@@ -356,14 +321,74 @@ export class ApiEndpointDetector {
             source = 'header';
         } else if (param.includes('[FromForm]')) {
             source = 'form';
+        }
+
+        // Step 2: Extract parameter name from Name attribute if present
+        // e.g., [FromQuery(Name = "id")] long id -> name should be "id"
+        const attributeNameMatch = param.match(/Name\s*=\s*"(\w+)"/);
+        if (attributeNameMatch) {
+            name = attributeNameMatch[1];
+            console.log(`[C# API Detector]   ✓ Found Name attribute: "${name}"`);
+        }
+
+        // Step 3: Remove all attributes to simplify parsing
+        // Remove patterns like [FromQuery(...)], [FromBody], [Authorize(...)]
+        let cleanParam = param.replace(/\[[^\]]+\]/g, '').trim();
+        console.log(`[C# API Detector]   📝 Clean param: "${cleanParam}"`);
+
+        // Step 4: Extract type and variable name
+        // Supports: "Type name", "Type? name", "List<Type> name", "List<Type>? name", "Type[] name"
+        // Match pattern: (Type) (variableName) [= defaultValue]
+        const typeAndNameMatch = cleanParam.match(/^([\w<>?,\[\]\s]+?)\s+(\w+)(?:\s*=|\s*$)/);
+
+        if (typeAndNameMatch) {
+            type = typeAndNameMatch[1].trim();
+            const variableName = typeAndNameMatch[2].trim();
+
+            // If name wasn't extracted from attribute, use variable name
+            if (!name) {
+                name = variableName;
+            }
+
+            console.log(`[C# API Detector]   ✓ Type: "${type}", Variable: "${variableName}"`);
         } else {
-            // Default logic based on simple types
-            if (this.isSimpleType(type)) {
+            // Fallback: try simple space split
+            const parts = cleanParam.trim().split(/\s+/);
+            if (parts.length >= 2) {
+                // Last part is name, everything else is type
+                const lastPart = parts[parts.length - 1];
+                // Remove default value if present (e.g., "id = 0" -> "id")
+                const nameFromParts = lastPart.split('=')[0].trim();
+
+                if (!name) {
+                    name = nameFromParts;
+                }
+
+                type = parts.slice(0, parts.length - 1).join(' ').trim();
+                console.log(`[C# API Detector]   ⚠️ Fallback parse - Type: "${type}", Name: "${name}"`);
+            } else {
+                console.log(`[C# API Detector]   ❌ Failed to parse parameter: "${param}"`);
+                return null;
+            }
+        }
+
+        // Step 5: Check if type is nullable (for determining required field)
+        const isNullable = type.includes('?');
+
+        // Step 6: If source wasn't determined from attribute, infer from type
+        if (!param.includes('[From')) {
+            const baseType = type.replace(/\?/g, '').replace(/\[\]/g, '').replace(/<.*>/g, '').trim();
+
+            if (this.isSimpleType(baseType)) {
                 source = 'query';
+                required = !isNullable;
             } else {
                 source = 'body';
                 required = true;
             }
+            console.log(`[C# API Detector]   🔄 Inferred source: ${source} (baseType: ${baseType})`);
+        } else if (source === 'query') {
+            required = !isNullable;
         }
 
         const apiParam: ApiParameter = {
@@ -373,24 +398,11 @@ export class ApiEndpointDetector {
             required: required
         };
 
-        // For complex types used in body/form, try to parse class definition
-        if (!this.isSimpleType(type) && (source === 'body' || source === 'form')) {
-            console.log(`[C# API Detector] Parsing complex type: ${type}`);
-            const properties = this.classParser.parseClassDefinition(document, type);
-            if (properties && properties.length > 0) {
-                apiParam.properties = properties;
-                console.log(`[C# API Detector] Added ${properties.length} properties to parameter ${name}`);
-            } else {
-                console.log(`[C# API Detector] No properties found for type ${type}, will use generic generation`);
-            }
+        console.log(`[C# API Detector]   ✅ Result: name="${name}", type="${type}", source="${source}", required=${required}`);
 
-            // Also get the full class definition text for AI context
-            const classDefinition = this.classParser.getClassDefinitionText(document, type);
-            if (classDefinition) {
-                apiParam.classDefinition = classDefinition;
-                console.log(`[C# API Detector] Added full class definition for ${type}`);
-            }
-        }
+        // ⚡ OPTIMIZATION: Do NOT parse class definitions here!
+        // Parsing will be done lazily in ApiTestPanel when user clicks "Test API"
+        // This dramatically improves CodeLens performance
 
         return apiParam;
     }
@@ -432,5 +444,12 @@ export class ApiEndpointDetector {
         }
 
         return processedRoute;
+    }
+
+    /**
+     * Get the class parser instance for external access (e.g., cache management)
+     */
+    getClassParser(): CSharpClassParser {
+        return this.classParser;
     }
 }

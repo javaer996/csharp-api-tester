@@ -155,7 +155,7 @@ export class ApiTestPanel {
         );
     }
 
-    private updateContent() {
+    private async updateContent() {
         if (!this._currentEndpoint) {
             this._panel.webview.html = this.getWelcomeHtml();
             return;
@@ -167,12 +167,155 @@ export class ApiTestPanel {
             return;
         }
 
+        // ⚡ LAZY LOADING: Parse class definitions here (when user opens test panel)
+        // This dramatically improves CodeLens performance
+        await this.parseEndpointClassDefinitions();
+
         const fullBaseUrl = currentEnvironment.baseUrl;
         const fullHeaders = currentEnvironment.headers;
 
         const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment);
 
         this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, generatedRequest, fullHeaders, currentEnvironment);
+    }
+
+    /**
+     * ⚡ Parse class definitions for complex parameters (lazy loading)
+     * Called when user opens the test panel, not during CodeLens phase
+     */
+    private async parseEndpointClassDefinitions() {
+        if (!this._currentEndpoint) return;
+
+        console.log('[ApiTestPanel] ⚡ Parsing class definitions (lazy loading)...');
+
+        // Send loading message to webview
+        this._panel.webview.postMessage({
+            type: 'parsingStatus',
+            message: 'Parsing class definitions...'
+        });
+
+        const document = vscode.window.activeTextEditor?.document;
+        if (!document) return;
+
+        // Get class parser from detector
+        const detector = new (require('./apiEndpointDetector').ApiEndpointDetector)();
+        const classParser = detector.getClassParser();
+
+        // Track parsed classes to avoid infinite recursion
+        const parsedClasses = new Set<string>();
+
+        for (const param of this._currentEndpoint.parameters) {
+            // Skip if already parsed or not body/form parameter
+            if (param.properties || (param.source !== 'body' && param.source !== 'form')) {
+                continue;
+            }
+
+            // Parse recursively
+            await this.parseClassRecursively(param.type, param, document, classParser, parsedClasses);
+        }
+
+        console.log('[ApiTestPanel] ✅ Class definitions parsing complete');
+
+        // Send completion message to webview
+        this._panel.webview.postMessage({
+            type: 'parsingComplete'
+        });
+    }
+
+    /**
+     * Recursively parse class definitions and nested classes
+     */
+    private async parseClassRecursively(
+        className: string,
+        target: any,
+        document: vscode.TextDocument,
+        classParser: any,
+        parsedClasses: Set<string>
+    ): Promise<void> {
+        // Avoid infinite recursion
+        if (parsedClasses.has(className)) {
+            return;
+        }
+
+        // Check if it's a simple type
+        const isSimpleType = ['string', 'int', 'long', 'short', 'byte', 'bool', 'DateTime', 'DateTimeOffset', 'Guid', 'decimal', 'double', 'float'].includes(className);
+        if (isSimpleType) {
+            return;
+        }
+
+        parsedClasses.add(className);
+        console.log(`[ApiTestPanel] 📦 Parsing class: ${className}`);
+
+        try {
+            // Parse class properties
+            const properties = await classParser.parseClassDefinitionFromWorkspace(className, document);
+            if (properties && properties.length > 0) {
+                target.properties = properties;
+                console.log(`[ApiTestPanel] ✅ Found ${properties.length} properties for ${className}`);
+
+                // Recursively parse nested complex types
+                for (const prop of properties) {
+                    const propType = this.extractBaseType(prop.type);
+                    const isComplexType = !this.isSimpleType(propType);
+
+                    if (isComplexType && !parsedClasses.has(propType)) {
+                        console.log(`[ApiTestPanel] 🔄 Found nested class: ${propType} in property ${prop.name}`);
+
+                        // Ensure properties object exists for nested types
+                        if (!prop.properties) {
+                            await this.parseClassRecursively(propType, prop, document, classParser, parsedClasses);
+                        }
+                    }
+                }
+            }
+
+            // Get full class definition for AI context
+            const classDefinition = await classParser.getClassDefinitionTextFromWorkspace(className, document);
+            if (classDefinition) {
+                target.classDefinition = classDefinition;
+            }
+        } catch (error) {
+            console.error(`[ApiTestPanel] ❌ Failed to parse ${className}:`, error);
+        }
+    }
+
+    /**
+     * Extract base type from generic types (List<T>, IEnumerable<T>, etc.)
+     */
+    private extractBaseType(type: string): string {
+        // Handle array types: User[] -> User
+        if (type.endsWith('[]')) {
+            return type.slice(0, -2);
+        }
+
+        // Handle generic types: List<User> -> User
+        const genericMatch = type.match(/<(.+)>/);
+        if (genericMatch) {
+            return genericMatch[1].trim();
+        }
+
+        // Handle nullable types: User? -> User
+        if (type.endsWith('?')) {
+            return type.slice(0, -1);
+        }
+
+        return type;
+    }
+
+    /**
+     * Check if a type is a simple/primitive type
+     */
+    private isSimpleType(type: string): boolean {
+        const simpleTypes = [
+            'string', 'int', 'long', 'short', 'byte',
+            'uint', 'ulong', 'ushort', 'sbyte',
+            'double', 'float', 'decimal',
+            'bool', 'DateTime', 'DateTimeOffset',
+            'Guid', 'char', 'object'
+        ];
+
+        const baseType = type.replace('?', '').replace('[]', '');
+        return simpleTypes.includes(baseType);
     }
 
     private async testApi(requestData: any) {
@@ -1923,6 +2066,10 @@ export class ApiTestPanel {
                 displayAIConversation(message.conversation);
             } else if (message.type === 'restoreOriginalJsonData') {
                 // This is handled by the restoreOriginalJson function directly
+            } else if (message.type === 'parsingStatus') {
+                showNotification('⚡ ' + message.message, 'info');
+            } else if (message.type === 'parsingComplete') {
+                showNotification('✅ Class parsing complete!', 'success');
             }
         });
 
@@ -1958,26 +2105,31 @@ export class ApiTestPanel {
         // Show notification
         function showNotification(message, type) {
             const notification = document.createElement('div');
+            let bgColor = '#F93E3E'; // error
+            if (type === 'success') bgColor = '#49CC90';
+            if (type === 'info') bgColor = '#61AFFE';
+
             notification.style.cssText = \`
                 position: fixed;
                 top: 20px;
                 right: 20px;
                 padding: 15px 20px;
                 border-radius: 4px;
-                background: \${type === 'success' ? '#49CC90' : '#F93E3E'};
+                background: \${bgColor};
                 color: white;
                 font-size: 14px;
-                z-index: 1000;
+                z-index: 10000;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.3);
                 animation: slideIn 0.3s ease-out;
             \`;
             notification.textContent = message;
             document.body.appendChild(notification);
 
+            const duration = type === 'info' ? 2000 : 3000;
             setTimeout(() => {
                 notification.style.animation = 'slideOut 0.3s ease-out';
                 setTimeout(() => notification.remove(), 300);
-            }, 3000);
+            }, duration);
         }
 
         // Display response

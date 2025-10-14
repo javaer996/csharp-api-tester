@@ -11,10 +11,10 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
         });
     }
 
-    public provideCodeLenses(
+    public async provideCodeLenses(
         document: vscode.TextDocument,
         token: vscode.CancellationToken
-    ): vscode.CodeLens[] | Thenable<vscode.CodeLens[]> {
+    ): Promise<vscode.CodeLens[]> {
         console.log(`[C# API CodeLens] Providing code lenses for document: ${document.fileName}`);
         console.log(`[C# API CodeLens] Document language: ${document.languageId}`);
         console.log(`[C# API CodeLens] Document URI: ${document.uri.toString()}`);
@@ -26,7 +26,7 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
 
         try {
             console.log(`[C# API CodeLens] Starting endpoint detection...`);
-            const endpoints = this.detector.detectApiEndpoints(document);
+            const endpoints = await this.detector.detectApiEndpoints(document);
             console.log(`[C# API CodeLens] Detected ${endpoints.length} endpoints`);
 
             const codeLenses: vscode.CodeLens[] = [];

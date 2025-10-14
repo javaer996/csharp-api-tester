@@ -72,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (editor && editor.document.languageId === 'csharp') {
             console.log(`🔍 Debugging API detection for: ${editor.document.fileName}`);
 
-            const endpoints = detector.detectApiEndpoints(editor.document);
+            const endpoints = await detector.detectApiEndpoints(editor.document);
             console.log(`📊 Found ${endpoints.length} API endpoints`);
 
             endpoints.forEach((endpoint, index) => {
@@ -207,6 +207,17 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(documentChangeDisposable);
+
+    // Invalidate cache when C# files are saved
+    const documentSaveDisposable = vscode.workspace.onDidSaveTextDocument((document) => {
+        if (document.languageId === 'csharp') {
+            console.log(`[C# API Extension] Document saved, invalidating cache for: ${document.uri.fsPath}`);
+            const cache = detector.getClassParser().getCache();
+            cache.invalidateFile(document.uri.fsPath);
+        }
+    });
+
+    context.subscriptions.push(documentSaveDisposable);
 
     console.log('🔧 All extension components initialized successfully');
 }

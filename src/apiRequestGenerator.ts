@@ -207,16 +207,78 @@ export class ApiRequestGenerator {
         const obj: Record<string, any> = {};
 
         for (const prop of properties) {
-            // Generate value based on property name and type
-            obj[prop.name] = this.generateSampleValue(prop.type, prop.name);
-            console.log(`[ApiRequestGenerator] Generated ${prop.name}: ${obj[prop.name]} (type: ${prop.type})`);
+            // Check if property type is a complex type that might have nested properties
+            const isComplexType = !this.isSimpleType(prop.type);
+
+            if (isComplexType && prop.type.includes('List<')) {
+                // Handle List/array types: generate array with one sample item
+                const innerType = this.extractInnerType(prop.type);
+
+                // Check if the property itself has nested properties (recursively parsed)
+                if (prop.properties && prop.properties.length > 0) {
+                    console.log(`[ApiRequestGenerator] Generating array from nested properties for ${prop.name}`);
+                    obj[prop.name] = [this.generateObjectFromProperties(prop.properties)];
+                } else {
+                    obj[prop.name] = [this.generateSampleValue(innerType, prop.name)];
+                }
+            } else if (isComplexType) {
+                // For complex types, check if we have recursively parsed properties
+                if (prop.properties && prop.properties.length > 0) {
+                    console.log(`[ApiRequestGenerator] Generating object from ${prop.properties.length} nested properties for ${prop.name}`);
+                    obj[prop.name] = this.generateObjectFromProperties(prop.properties);
+                } else {
+                    // Fallback to generic object generation
+                    obj[prop.name] = this.generateComplexObject(prop.type);
+                }
+            } else {
+                // Generate value based on property name and type
+                obj[prop.name] = this.generateSampleValue(prop.type, prop.name);
+            }
+
+            console.log(`[ApiRequestGenerator] Generated ${prop.name}: ${typeof obj[prop.name] === 'object' ? JSON.stringify(obj[prop.name]).substring(0, 100) : obj[prop.name]} (type: ${prop.type})`);
         }
 
         return obj;
     }
 
+    /**
+     * Extract inner type from generic type (e.g., List<User> -> User)
+     */
+    private extractInnerType(type: string): string {
+        const match = type.match(/<([^<>]+)>/);
+        return match ? match[1].trim() : type;
+    }
+
+    /**
+     * Check if a type is simple/primitive
+     */
+    private isSimpleType(type: string): boolean {
+        const simpleTypes = [
+            'string', 'int', 'long', 'short', 'byte',
+            'uint', 'ulong', 'ushort', 'sbyte',
+            'double', 'float', 'decimal',
+            'bool', 'boolean', 'DateTime', 'DateTimeOffset',
+            'Guid', 'char', 'object'
+        ];
+
+        const cleanType = type.replace('?', '').replace('[]', '').toLowerCase();
+        // Check if it's a generic collection
+        if (cleanType.startsWith('list<') || cleanType.startsWith('ienumerable<') ||
+            cleanType.startsWith('icollection<') || cleanType.startsWith('ilist<')) {
+            return false;
+        }
+
+        return simpleTypes.some(t => cleanType === t.toLowerCase());
+    }
+
     private generateComplexObject(type: string): any {
-        // Handle common object types
+        // Handle array types
+        if (type.includes('[]') || type.includes('List<') || type.includes('IEnumerable<')) {
+            const innerType = this.extractInnerType(type.replace('[]', ''));
+            return [this.generateSampleValueByType(innerType)];
+        }
+
+        // Handle common simple object types
         if (type.includes('string')) {
             return this.sampleData.string[0];
         }
@@ -240,13 +302,18 @@ export class ApiRequestGenerator {
         // Generate generic object for complex types
         const sampleObject: Record<string, any> = {};
 
-        // Common property names based on naming patterns
+        // More comprehensive common property names
         const commonProperties = [
-            'id', 'name', 'email', 'description', 'status',
-            'createdDate', 'updatedDate', 'isActive'
+            'id', 'name', 'title', 'description',
+            'email', 'phone', 'address',
+            'createdDate', 'updatedDate',
+            'isActive', 'status'
         ];
 
-        for (const prop of commonProperties.slice(0, 4)) {
+        // Generate 4-6 properties for a realistic object
+        const propertyCount = Math.min(6, commonProperties.length);
+        for (let i = 0; i < propertyCount; i++) {
+            const prop = commonProperties[i];
             sampleObject[prop] = this.generateSampleValueByPropertyName(prop);
         }
 

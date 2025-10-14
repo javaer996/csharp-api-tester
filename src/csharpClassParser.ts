@@ -1,12 +1,41 @@
 import * as vscode from 'vscode';
+import { ClassDefinitionCache } from './classDefinitionCache';
 
 export interface ClassProperty {
     name: string;
     type: string;
     required: boolean;
+    properties?: ClassProperty[];  // For nested complex types
 }
 
 export class CSharpClassParser {
+    private cache: ClassDefinitionCache;
+
+    constructor() {
+        this.cache = new ClassDefinitionCache(100, 30); // Max 100 entries, 30 min TTL
+        console.log('[CSharpClassParser] Initialized with cache');
+    }
+
+    /**
+     * Extract inner type from generic type
+     * Examples: List<User> -> User, Task<ActionResult<Product>> -> Product
+     */
+    private extractInnerType(type: string): string {
+        // Handle nested generics: Task<ActionResult<Product>> -> Product
+        const deepGenericMatch = type.match(/<([^<>]+<[^<>]+>)>/);
+        if (deepGenericMatch) {
+            return this.extractInnerType(deepGenericMatch[1]);
+        }
+
+        // Handle simple generics: List<User> -> User
+        const genericMatch = type.match(/<([^<>]+)>/);
+        if (genericMatch) {
+            return genericMatch[1].trim();
+        }
+
+        return type;
+    }
+
     /**
      * Parse a C# class definition from the document
      * @param document The text document to search in
@@ -14,23 +43,36 @@ export class CSharpClassParser {
      * @returns Array of class properties, or null if class not found
      */
     parseClassDefinition(document: vscode.TextDocument, className: string): ClassProperty[] | null {
+        // Extract inner type if generic
+        const actualClassName = this.extractInnerType(className);
+
+        // Check cache first
+        const cached = this.cache.get(actualClassName);
+        if (cached) {
+            return cached.properties;
+        }
         const text = document.getText();
         const lines = text.split('\n');
 
-        console.log(`[CSharpClassParser] Searching for class: ${className}`);
+        console.log(`[CSharpClassParser] Searching for class: ${actualClassName}`);
 
         // Find the class definition
-        const classLineIndex = this.findClassDefinition(lines, className);
+        const classLineIndex = this.findClassDefinition(lines, actualClassName);
         if (classLineIndex === -1) {
-            console.log(`[CSharpClassParser] Class ${className} not found in document`);
+            console.log(`[CSharpClassParser] Class ${actualClassName} not found in document`);
             return null;
         }
 
-        console.log(`[CSharpClassParser] Found class ${className} at line ${classLineIndex}`);
+        console.log(`[CSharpClassParser] Found class ${actualClassName} at line ${classLineIndex}`);
 
         // Extract properties from the class
         const properties = this.extractClassProperties(lines, classLineIndex);
-        console.log(`[CSharpClassParser] Extracted ${properties.length} properties from ${className}`);
+        console.log(`[CSharpClassParser] Extracted ${properties.length} properties from ${actualClassName}`);
+
+        // Cache the result
+        if (properties.length > 0) {
+            this.cache.set(actualClassName, properties, null, document.uri.fsPath);
+        }
 
         return properties;
     }
@@ -42,24 +84,37 @@ export class CSharpClassParser {
      * @returns Array of class properties, or null if class not found
      */
     async parseClassDefinitionFromWorkspace(className: string, currentDocument: vscode.TextDocument): Promise<ClassProperty[] | null> {
-        console.log(`[CSharpClassParser] Searching workspace for class: ${className}`);
+        // Extract inner type if generic
+        const actualClassName = this.extractInnerType(className);
 
-        // First, try the current document
-        const propertiesFromCurrent = this.parseClassDefinition(currentDocument, className);
+        console.log(`[CSharpClassParser] Searching workspace for class: ${actualClassName}`);
+
+        // Check cache first
+        const cached = this.cache.get(actualClassName);
+        if (cached) {
+            return cached.properties;
+        }
+
+        // First, try the current document (fast path)
+        const propertiesFromCurrent = this.parseClassDefinition(currentDocument, actualClassName);
         if (propertiesFromCurrent) {
             return propertiesFromCurrent;
         }
 
-        // Search in workspace C# files
-        const files = await vscode.workspace.findFiles('**/*.cs', '**/node_modules/**', 50);
+        // Search in workspace C# files with improved exclusions
+        const files = await vscode.workspace.findFiles(
+            '**/*.cs',
+            '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
+            200 // Increased from 50 to 200
+        );
         console.log(`[CSharpClassParser] Found ${files.length} C# files in workspace`);
 
         for (const fileUri of files) {
             try {
                 const document = await vscode.workspace.openTextDocument(fileUri);
-                const properties = this.parseClassDefinition(document, className);
+                const properties = this.parseClassDefinition(document, actualClassName);
                 if (properties) {
-                    console.log(`[CSharpClassParser] Found ${className} in ${fileUri.fsPath}`);
+                    console.log(`[CSharpClassParser] Found ${actualClassName} in ${fileUri.fsPath}`);
                     return properties;
                 }
             } catch (error) {
@@ -67,7 +122,7 @@ export class CSharpClassParser {
             }
         }
 
-        console.log(`[CSharpClassParser] Class ${className} not found in workspace`);
+        console.log(`[CSharpClassParser] Class ${actualClassName} not found in workspace`);
         return null;
     }
 
@@ -88,10 +143,14 @@ export class CSharpClassParser {
         const properties: ClassProperty[] = [];
         let braceCount = 0;
         let inClass = false;
+        let currentProperty: { type: string; name: string } | null = null;
+        let propertyBraceCount = 0;
+        let foundGetOrSet = false;
 
         // Start from the class line and parse until we exit the class
         for (let i = classLineIndex; i < lines.length; i++) {
             const line = lines[i];
+            const trimmedLine = line.trim();
 
             // Count braces to track scope
             for (const char of line) {
@@ -109,32 +168,87 @@ export class CSharpClassParser {
                 break;
             }
 
-            // Parse property declarations
-            const property = this.parsePropertyLine(line);
-            if (property) {
-                properties.push(property);
-                console.log(`[CSharpClassParser] Found property: ${property.name} (${property.type})`);
+            // Skip comments and attributes
+            if (trimmedLine.startsWith('//') || trimmedLine.startsWith('///') ||
+                trimmedLine.startsWith('[') || trimmedLine.startsWith('*') ||
+                trimmedLine === '' || !inClass) {
+                continue;
+            }
+
+            // Try to parse single-line property first
+            const singleLineProperty = this.parseSingleLineProperty(trimmedLine);
+            if (singleLineProperty) {
+                properties.push(singleLineProperty);
+                console.log(`[CSharpClassParser] Found property (single-line): ${singleLineProperty.name} (${singleLineProperty.type})`);
+                continue;
+            }
+
+            // Handle multi-line properties
+            if (currentProperty === null) {
+                // Look for property declaration: public Type PropertyName
+                const propertyDeclaration = this.parsePropertyDeclaration(trimmedLine);
+                if (propertyDeclaration) {
+                    currentProperty = propertyDeclaration;
+                    propertyBraceCount = 0;
+                    foundGetOrSet = false;
+                    console.log(`[CSharpClassParser] Started multi-line property: ${propertyDeclaration.name} (${propertyDeclaration.type})`);
+                }
+            } else {
+                // We're parsing a multi-line property
+                // Check if this line contains get or set BEFORE counting braces
+                const hasGetter = /\bget\b/.test(trimmedLine);
+                const hasSetter = /\bset\b/.test(trimmedLine);
+
+                if (hasGetter || hasSetter) {
+                    foundGetOrSet = true;
+                }
+
+                // Count braces for property scope
+                for (const char of trimmedLine) {
+                    if (char === '{') propertyBraceCount++;
+                    if (char === '}') propertyBraceCount--;
+                }
+
+                // Check if property definition is complete
+                // Complete when: we found get/set AND property braces are closed
+                if (foundGetOrSet && propertyBraceCount <= 0) {
+                    const type = currentProperty.type;
+                    const name = currentProperty.name;
+
+                    // Determine if the property is required (not nullable)
+                    const isNullable = type.includes('?') || type.toLowerCase().includes('nullable');
+                    const required = !isNullable;
+
+                    properties.push({
+                        name: name,
+                        type: this.normalizeType(type),
+                        required: required
+                    });
+
+                    console.log(`[CSharpClassParser] Found property (multi-line): ${name} (${type})`);
+                    currentProperty = null;
+                    propertyBraceCount = 0;
+                    foundGetOrSet = false;
+                }
             }
         }
 
         return properties;
     }
 
-    private parsePropertyLine(line: string): ClassProperty | null {
-        const trimmedLine = line.trim();
-
-        // Look for property patterns:
-        // public string Name { get; set; }
-        // public int? Age { get; set; }
-        // public List<string> Tags { get; set; }
-        const propertyRegex = /^\s*(?:public|private|protected|internal)?\s+(\S+(?:<[^>]+>)?)\s+(\w+)\s*\{\s*get;?\s*set;?\s*\}/i;
-        const match = trimmedLine.match(propertyRegex);
+    /**
+     * Parse single-line property: public string Name { get; set; }
+     */
+    private parseSingleLineProperty(line: string): ClassProperty | null {
+        // Pattern: public Type Name { get; set; } [= value;]
+        const propertyRegex = /^\s*(?:public|private|protected|internal)?\s+([\w<>?,\[\]\s]+?)\s+(\w+)\s*\{\s*get;?\s*set;?\s*\}(?:\s*=\s*[^;]+)?;?$/i;
+        const match = line.match(propertyRegex);
 
         if (!match) {
             return null;
         }
 
-        const type = match[1];
+        const type = match[1].trim();
         const name = match[2];
 
         // Determine if the property is required (not nullable)
@@ -146,6 +260,25 @@ export class CSharpClassParser {
             type: this.normalizeType(type),
             required: required
         };
+    }
+
+    /**
+     * Parse property declaration line: public Type PropertyName
+     */
+    private parsePropertyDeclaration(line: string): { type: string; name: string } | null {
+        // Pattern: public Type PropertyName [{ or nothing]
+        // Must have public/private/protected/internal, type, and name
+        const declRegex = /^\s*(?:public|private|protected|internal)\s+([\w<>?,\[\]\s]+?)\s+(\w+)\s*(?:\{)?$/i;
+        const match = line.match(declRegex);
+
+        if (!match) {
+            return null;
+        }
+
+        const type = match[1].trim();
+        const name = match[2];
+
+        return { type, name };
     }
 
     private normalizeType(type: string): string {
@@ -177,15 +310,24 @@ export class CSharpClassParser {
      * @returns The full class definition text, or null if not found
      */
     getClassDefinitionText(document: vscode.TextDocument, className: string): string | null {
+        // Extract inner type if generic
+        const actualClassName = this.extractInnerType(className);
+
+        // Check cache first
+        const cached = this.cache.get(actualClassName);
+        if (cached && cached.classDefinition) {
+            return cached.classDefinition;
+        }
+
         const text = document.getText();
         const lines = text.split('\n');
 
-        console.log(`[CSharpClassParser] Getting full definition for class: ${className}`);
+        console.log(`[CSharpClassParser] Getting full definition for class: ${actualClassName}`);
 
         // Find the class definition
-        const classLineIndex = this.findClassDefinition(lines, className);
+        const classLineIndex = this.findClassDefinition(lines, actualClassName);
         if (classLineIndex === -1) {
-            console.log(`[CSharpClassParser] Class ${className} not found in document`);
+            console.log(`[CSharpClassParser] Class ${actualClassName} not found in document`);
             return null;
         }
 
@@ -222,8 +364,61 @@ export class CSharpClassParser {
             }
         }
 
-        console.log(`[CSharpClassParser] Captured ${classDefinition.split('\n').length} lines for ${className}`);
+        console.log(`[CSharpClassParser] Captured ${classDefinition.split('\n').length} lines for ${actualClassName}`);
+
+        // Update cache with class definition
+        const properties = this.extractClassProperties(lines, classLineIndex);
+        this.cache.set(actualClassName, properties, classDefinition.trim(), document.uri.fsPath);
+
         return classDefinition.trim();
+    }
+
+    /**
+     * Get the full class definition as text from workspace files
+     * @param className The name of the class to find
+     * @param currentDocument The current document (for relative path resolution)
+     * @returns The full class definition text, or null if not found
+     */
+    async getClassDefinitionTextFromWorkspace(className: string, currentDocument: vscode.TextDocument): Promise<string | null> {
+        // Extract inner type if generic
+        const actualClassName = this.extractInnerType(className);
+
+        console.log(`[CSharpClassParser] Getting workspace definition for class: ${actualClassName}`);
+
+        // Check cache first
+        const cached = this.cache.get(actualClassName);
+        if (cached && cached.classDefinition) {
+            return cached.classDefinition;
+        }
+
+        // First, try the current document
+        const definitionFromCurrent = this.getClassDefinitionText(currentDocument, actualClassName);
+        if (definitionFromCurrent) {
+            return definitionFromCurrent;
+        }
+
+        // Search in workspace C# files
+        const files = await vscode.workspace.findFiles(
+            '**/*.cs',
+            '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
+            200
+        );
+
+        for (const fileUri of files) {
+            try {
+                const document = await vscode.workspace.openTextDocument(fileUri);
+                const definition = this.getClassDefinitionText(document, actualClassName);
+                if (definition) {
+                    console.log(`[CSharpClassParser] Found definition for ${actualClassName} in ${fileUri.fsPath}`);
+                    return definition;
+                }
+            } catch (error) {
+                console.error(`[CSharpClassParser] Error reading file ${fileUri.fsPath}:`, error);
+            }
+        }
+
+        console.log(`[CSharpClassParser] Definition for ${actualClassName} not found in workspace`);
+        return null;
     }
 
     /**
@@ -241,5 +436,12 @@ export class CSharpClassParser {
         const normalizedType = type.replace('?', '').toLowerCase();
         return simpleTypes.includes(normalizedType) ||
                simpleTypes.some(t => normalizedType === t.toLowerCase());
+    }
+
+    /**
+     * Get the cache instance for external cache management
+     */
+    getCache(): ClassDefinitionCache {
+        return this.cache;
     }
 }
