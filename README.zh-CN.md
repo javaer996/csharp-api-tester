@@ -1,6 +1,6 @@
 # C# API 测试工具 for Visual Studio Code
 
-English | [中文文档](./README.zh-CN.md)
+[English](./README.md) | 中文文档
 
 一个智能的 Visual Studio Code 扩展，可以直接从代码编辑器中自动检测和测试 C# Web API 端点，并支持 AI 驱动的智能 JSON 生成。
 

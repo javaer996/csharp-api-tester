@@ -1,8 +1,21 @@
 {
   "name": "csharp-api-tester",
   "displayName": "C# API Tester",
-  "description": "Intelligent C# Web API testing extension with automatic endpoint detection and request generation",
+  "description": "C# Web API testing extension with automatic endpoint detection and request generation",
   "version": "0.1.0",
+  "publisher": "tengjiang",
+  "author": {
+    "name": "tengjiang"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/javaer996/csharp-httpclient"
+  },
+  "bugs": {
+    "url": "https://github.com/javaer996/csharp-httpclient/issues"
+  },
+  "homepage": "https://github.com/javaer996/csharp-httpclient#readme",
   "engines": {
     "vscode": "^1.74.0"
   },
