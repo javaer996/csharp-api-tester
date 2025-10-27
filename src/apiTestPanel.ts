@@ -19,6 +19,8 @@ export class ApiTestPanel {
     private _panelKey: string;
     private _lastAIConversation: any | null = null; // Store conversation for this panel
 
+    private _parsingCancelled: boolean = false;
+
     public static createOrShow(extensionUri: vscode.Uri, endpoint?: ApiEndpointInfo) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
@@ -131,6 +133,10 @@ export class ApiTestPanel {
                             console.log(`[ApiTestPanel] 🔄 Processing restoreOriginalJson`);
                             this.restoreOriginalJson();
                             break;
+                        case 'cancelParsing':
+                            console.log(`[ApiTestPanel] ❌ Processing cancelParsing`);
+                            this.cancelParsing();
+                            break;
                         default:
                             console.log(`[ApiTestPanel] ❓ Unknown message type:`, message.type);
                     }
@@ -167,38 +173,54 @@ export class ApiTestPanel {
             return;
         }
 
-        // Show loading HTML first to avoid black screen
-        this._panel.webview.html = this.getLoadingHtml(this._currentEndpoint);
-
-        // ⚡ LAZY LOADING: Parse class definitions here (when user opens test panel)
-        // This dramatically improves CodeLens performance
-        await this.parseEndpointClassDefinitions();
-
         const fullBaseUrl = currentEnvironment.baseUrl;
         const fullHeaders = currentEnvironment.headers;
 
+        // Generate initial request (may not have full class properties yet)
         const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment);
 
+        // Render complete UI immediately (no full-screen loading)
         this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, generatedRequest, fullHeaders, currentEnvironment);
+
+        // ⚡ LAZY LOADING: Parse class definitions in background
+        // This dramatically improves CodeLens performance
+        // Body tab will show parsing status, not blocking other operations
+        this.parseEndpointClassDefinitionsInBackground();
     }
 
     /**
-     * ⚡ Parse class definitions for complex parameters (lazy loading)
-     * Called when user opens the test panel, not during CodeLens phase
+     * ⚡ Parse class definitions in background (non-blocking)
      */
-    private async parseEndpointClassDefinitions() {
+    private async parseEndpointClassDefinitionsInBackground() {
         if (!this._currentEndpoint) return;
 
-        console.log('[ApiTestPanel] ⚡ Parsing class definitions (lazy loading)...');
+        // Reset cancellation flag
+        this._parsingCancelled = false;
 
-        // Send loading message to webview
+        // Check if there are body/form parameters that need parsing
+        const needsParsing = this._currentEndpoint.parameters.some(p =>
+            (p.source === 'body' || p.source === 'form') &&
+            (!p.properties || p.properties.length === 0)
+        );
+
+        if (!needsParsing) {
+            console.log('[ApiTestPanel] ⚡ No parsing needed, all parameters already parsed');
+            return;
+        }
+
+        console.log('[ApiTestPanel] ⚡ Starting background parsing...');
+
+        // Send initial parsing status to webview
         this._panel.webview.postMessage({
-            type: 'parsingStatus',
-            message: 'Parsing class definitions...'
+            type: 'parsingStarted',
+            message: '正在解析参数类型...'
         });
 
         const document = vscode.window.activeTextEditor?.document;
-        if (!document) return;
+        if (!document) {
+            this._panel.webview.postMessage({ type: 'parsingComplete' });
+            return;
+        }
 
         // Get class parser from detector
         const detector = new (require('./apiEndpointDetector').ApiEndpointDetector)();
@@ -208,6 +230,16 @@ export class ApiTestPanel {
         const parsedClasses = new Set<string>();
 
         for (const param of this._currentEndpoint.parameters) {
+            // Check cancellation
+            if (this._parsingCancelled) {
+                console.log('[ApiTestPanel] ❌ Parsing cancelled by user');
+                this._panel.webview.postMessage({
+                    type: 'parsingCancelled',
+                    message: '解析已取消'
+                });
+                return;
+            }
+
             // Only parse if it's a body/form parameter AND hasn't been successfully parsed yet
             if ((param.source === 'body' || param.source === 'form')) {
                 // Check if already parsed successfully (has properties with length > 0)
@@ -218,6 +250,12 @@ export class ApiTestPanel {
                     continue;
                 }
 
+                // Send progress update
+                this._panel.webview.postMessage({
+                    type: 'parsingStatus',
+                    message: `正在解析 ${param.type}...`
+                });
+
                 // Parse recursively
                 console.log(`[ApiTestPanel] 📦 Parsing ${param.type}...`);
                 await this.parseClassRecursively(param.type, param, document, classParser, parsedClasses);
@@ -226,10 +264,42 @@ export class ApiTestPanel {
 
         console.log('[ApiTestPanel] ✅ Class definitions parsing complete');
 
-        // Send completion message to webview
-        this._panel.webview.postMessage({
-            type: 'parsingComplete'
-        });
+        // Check if parsing was successful (any parameter has valid properties)
+        let hasValidProperties = false;
+        for (const param of this._currentEndpoint.parameters) {
+            if ((param.source === 'body' || param.source === 'form') &&
+                param.properties && param.properties.length > 0) {
+                hasValidProperties = true;
+                break;
+            }
+        }
+
+        // Regenerate request body with parsed properties
+        const currentEnvironment = this._environmentManager.getCurrentEnvironment();
+        if (currentEnvironment) {
+            const updatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment);
+
+            if (!hasValidProperties || !updatedRequest.body) {
+                // 解析失败或无法生成 body
+                console.log('[ApiTestPanel] ⚠️ Parsing failed or no valid body generated');
+                this._panel.webview.postMessage({
+                    type: 'parsingFailed',
+                    message: '无法解析参数类型定义,请手动编写请求体'
+                });
+            } else {
+                // Send updated body to webview
+                this._panel.webview.postMessage({
+                    type: 'updateBodyContent',
+                    body: updatedRequest.body ? JSON.stringify(updatedRequest.body, null, 2) : null
+                });
+
+                // Send completion message to webview
+                this._panel.webview.postMessage({
+                    type: 'parsingComplete',
+                    message: '参数解析完成!'
+                });
+            }
+        }
     }
 
     /**
@@ -663,6 +733,11 @@ export class ApiTestPanel {
         });
     }
 
+    private cancelParsing(): void {
+        console.log('[ApiTestPanel] Setting cancellation flag...');
+        this._parsingCancelled = true;
+    }
+
     private getWelcomeHtml(): string {
         return `
             <!DOCTYPE html>
@@ -762,64 +837,10 @@ export class ApiTestPanel {
         `;
     }
 
-    private getLoadingHtml(endpoint: ApiEndpointInfo): string {
-        return `
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Loading...</title>
-                <style>
-                    body {
-                        font-family: var(--vscode-font-family);
-                        color: var(--vscode-foreground);
-                        background-color: var(--vscode-editor-background);
-                        padding: 20px;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        height: 100vh;
-                        margin: 0;
-                    }
-                    .loading-container {
-                        text-align: center;
-                    }
-                    .loading-spinner {
-                        border: 4px solid var(--vscode-editor-inactiveSelectionBackground);
-                        border-top: 4px solid #49CC90;
-                        border-radius: 50%;
-                        width: 50px;
-                        height: 50px;
-                        animation: spin 1s linear infinite;
-                        margin: 0 auto 20px;
-                    }
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                    .loading-text {
-                        font-size: 16px;
-                        margin-bottom: 10px;
-                    }
-                    .loading-subtitle {
-                        font-size: 13px;
-                        color: var(--vscode-descriptionForeground);
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="loading-container">
-                    <div class="loading-spinner"></div>
-                    <div class="loading-text">⚡ 正在解析参数...</div>
-                    <div class="loading-subtitle">${endpoint.method} ${endpoint.route}</div>
-                </div>
-            </body>
-            </html>
-        `;
-    }
-
     private getTestPanelHtml(endpoint: ApiEndpointInfo, request: GeneratedRequest, _defaultHeaders: Record<string, string>, currentEnvironment: Environment): string {
+        // Check if endpoint has body parameter (regardless of whether it's parsed yet)
+        const hasBodyParam = endpoint.parameters.some(p => p.source === 'body');
+
         // Prepare data for JavaScript injection
         const endpointMethod = endpoint.method;
         const endpointRoute = endpoint.route;
@@ -1523,6 +1544,11 @@ export class ApiTestPanel {
                 opacity: 0;
             }
         }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -1538,14 +1564,14 @@ export class ApiTestPanel {
         <!-- Request Tabs -->
         <div class="tabs-container">
             <div class="tab-nav">
-                <button class="tab-button ${!request.body && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
-                <button class="tab-button ${!request.body && !hasFormData && Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
-                ${request.body ? '<button class="tab-button active" onclick="switchTab(\'body\')">Body</button>' : ''}
+                <button class="tab-button ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
+                <button class="tab-button ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
+                ${hasBodyParam ? '<button class="tab-button active" onclick="switchTab(\'body\')">Body</button>' : ''}
                 ${hasFormData ? '<button class="tab-button active" onclick="switchTab(\'form\')">Form</button>' : ''}
             </div>
 
             <!-- Query Tab -->
-            <div class="tab-content ${!request.body && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
+            <div class="tab-content ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
                 <table class="params-table">
                     <thead>
                         <tr>
@@ -1564,7 +1590,7 @@ export class ApiTestPanel {
             </div>
 
             <!-- Headers Tab -->
-            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !request.body && !hasFormData ? 'active' : ''}" id="headers-tab">
+            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !hasBodyParam && !hasFormData ? 'active' : ''}" id="headers-tab">
                 <table class="params-table">
                     <thead>
                         <tr>
@@ -1582,10 +1608,19 @@ export class ApiTestPanel {
                 <button class="add-param-btn" onclick="addHeader()">+ Add Header</button>
             </div>
 
-            ${request.body ? `
+            ${hasBodyParam ? `
             <!-- Body Tab -->
             <div class="tab-content active" id="body-tab">
                 <div class="body-editor">
+                    <!-- Parsing Status Overlay (覆盖在 textarea 上) -->
+                    <div id="body-parsing-overlay" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.75); z-index: 100; align-items: center; justify-content: center;">
+                        <div style="background: var(--vscode-editor-background); padding: 30px 40px; border-radius: 6px; text-align: center; min-width: 300px; border: 1px solid var(--vscode-panel-border); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);">
+                            <div class="loading-spinner" style="border: 3px solid var(--vscode-editor-inactiveSelectionBackground); border-top: 3px solid #49CC90; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px;"></div>
+                            <div id="body-parsing-text" style="font-size: 14px; color: var(--vscode-foreground); margin-bottom: 20px; line-height: 1.5;">正在解析参数...</div>
+                            <button id="body-parsing-cancel-btn" style="padding: 8px 20px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; transition: background 0.2s;">取消解析</button>
+                        </div>
+                    </div>
+
                     <div class="body-editor-toolbar">
                         <div class="body-editor-toolbar-left">
                             <button class="restore-button" onclick="restoreOriginalJson()" title="Restore Original JSON">↺ Restore</button>
@@ -1596,7 +1631,7 @@ export class ApiTestPanel {
                             <button class="ai-button" onclick="generateWithAI()" id="ai-button" title="AI Smart Generation">🤖 AI Generate</button>
                         </div>
                     </div>
-                    <textarea id="request-body">${bodyJson}</textarea>
+                    <textarea id="request-body">${bodyJson || ''}</textarea>
                 </div>
             </div>
             ` : ''}
@@ -1704,6 +1739,16 @@ export class ApiTestPanel {
             renderHeaders();
             renderFormFields();
             updateUrlFromQueryParams();
+
+            // 绑定取消解析按钮事件
+            const cancelBtn = document.getElementById('body-parsing-cancel-btn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', () => {
+                    console.log('[Webview] Cancel parsing button clicked');
+                    vscode.postMessage({ type: 'cancelParsing' });
+                    hideParsingStatus();
+                });
+            }
         });
 
         // Tab switching
@@ -1989,6 +2034,46 @@ export class ApiTestPanel {
             }
         }
 
+        // Parsing status functions
+        function showParsingStatus(message) {
+            const overlay = document.getElementById('body-parsing-overlay');
+            const text = document.getElementById('body-parsing-text');
+            if (overlay && text) {
+                text.textContent = message || '正在解析参数...';
+                overlay.style.display = 'flex';
+            }
+        }
+
+        function updateParsingStatus(message) {
+            const text = document.getElementById('body-parsing-text');
+            if (text) {
+                text.textContent = message || '正在解析参数...';
+            }
+        }
+
+        function hideParsingStatus() {
+            const overlay = document.getElementById('body-parsing-overlay');
+            if (overlay) {
+                overlay.style.display = 'none';
+            }
+        }
+
+        function cancelParsing() {
+            console.log('[Webview] cancelParsing function called (deprecated, use button event)');
+            vscode.postMessage({
+                type: 'cancelParsing'
+            });
+            hideParsingStatus();
+        }
+
+        function updateBodyContent(body) {
+            const textarea = document.getElementById('request-body');
+            if (textarea && body) {
+                textarea.value = body;
+                showNotification('✅ Body 内容已更新', 'success');
+            }
+        }
+
         // Close conversation modal
         function closeConversationModal() {
             const modal = document.getElementById('conversation-modal');
@@ -2133,10 +2218,21 @@ export class ApiTestPanel {
                 displayAIConversation(message.conversation);
             } else if (message.type === 'restoreOriginalJsonData') {
                 // This is handled by the restoreOriginalJson function directly
+            } else if (message.type === 'parsingStarted') {
+                showParsingStatus(message.message);
             } else if (message.type === 'parsingStatus') {
-                showNotification('⚡ ' + message.message, 'info');
+                updateParsingStatus(message.message);
             } else if (message.type === 'parsingComplete') {
-                showNotification('✅ Class parsing complete!', 'success');
+                hideParsingStatus();
+                showNotification('✅ ' + (message.message || '参数解析完成!'), 'success');
+            } else if (message.type === 'parsingCancelled') {
+                hideParsingStatus();
+                showNotification('❌ ' + (message.message || '解析已取消'), 'info');
+            } else if (message.type === 'parsingFailed') {
+                hideParsingStatus();
+                showNotification('⚠️ ' + (message.message || '参数解析失败'), 'error');
+            } else if (message.type === 'updateBodyContent') {
+                updateBodyContent(message.body);
             }
         });
 

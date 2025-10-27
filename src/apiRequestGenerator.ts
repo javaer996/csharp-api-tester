@@ -182,7 +182,9 @@ export class ApiRequestGenerator {
                 console.log(`[ApiRequestGenerator] Generating body from ${bodyParam.properties.length} class properties`);
                 return this.generateObjectFromProperties(bodyParam.properties);
             } else {
-                return this.generateComplexObject(bodyParam.type);
+                // 如果没有解析到 properties,返回 null,不生成默认结构
+                console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, returning null`);
+                return null;
             }
         } else if (bodyParams.length > 1) {
             // Multiple body parameters (wrap in object)
