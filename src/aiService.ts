@@ -9,6 +9,7 @@ export interface AIConfig {
     model: string;
     maxTokens: number;
     systemPrompt: string;
+    timeout?: number;
 }
 
 export interface APIContext {
@@ -54,7 +55,8 @@ export class AIService {
             endpoint: config.get<string>('ai.endpoint', 'https://api.openai.com/v1/chat/completions'),
             model: config.get<string>('ai.model', 'gpt-3.5-turbo'),
             maxTokens: config.get<number>('ai.maxTokens', 1000),
-            systemPrompt: config.get<string>('ai.systemPrompt', 'You are a professional API testing assistant.')
+            systemPrompt: config.get<string>('ai.systemPrompt', 'You are a professional API testing assistant.'),
+            timeout: config.get<number>('ai.timeout', 60000)
         };
     }
 
@@ -237,7 +239,7 @@ export class AIService {
         try {
             const response = await axios.post(config.endpoint, requestBody, {
                 headers: headers,
-                timeout: 30000
+                timeout: config.timeout || 60000
             });
 
             console.log('[AIService] Full response:', response.data);

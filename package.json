@@ -150,6 +150,11 @@
           "default": "You are a professional API testing assistant. Generate realistic and contextually appropriate test data based on the API endpoint information and code context provided.",
           "description": "System prompt for AI generation"
         },
+        "csharpApiTester.ai.timeout": {
+          "type": "number",
+          "default": 60000,
+          "description": "AI API request timeout in milliseconds (default: 60000ms)"
+        },
         "csharpApiTester.globalHeaders": {
           "type": "object",
           "default": {},
