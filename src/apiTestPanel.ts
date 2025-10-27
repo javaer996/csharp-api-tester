@@ -1221,6 +1221,66 @@ export class ApiTestPanel {
         .json-boolean { color: #569CD6; }
         .json-null { color: #569CD6; }
 
+        /* JSON Editor Highlighting */
+        .json-editor-container {
+            position: relative;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .json-editor {
+            width: 100%;
+            flex: 1;
+            padding: 15px;
+            border: 1px solid var(--vscode-input-border);
+            border-top: none;
+            background-color: var(--vscode-textCodeBlock-background);
+            color: var(--vscode-editor-foreground);
+            border-radius: 0 0 4px 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            resize: vertical;
+            line-height: 1.5;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            transition: border-color 0.3s;
+        }
+
+        .json-editor:focus {
+            outline: none;
+        }
+
+        .json-editor.valid {
+            border-color: #49CC90;
+        }
+
+        .json-editor.invalid {
+            border-color: #F93E3E;
+        }
+
+        /* JSON Error Message */
+        .json-error-message {
+            display: none;
+            padding: 10px 15px;
+            margin-top: 5px;
+            background-color: rgba(249, 62, 62, 0.1);
+            border: 1px solid #F93E3E;
+            border-radius: 4px;
+            color: #F93E3E;
+            font-size: 12px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        .json-error-message.visible {
+            display: block;
+        }
+
+        .json-error-icon {
+            margin-right: 6px;
+        }
+
         .format-button, .ai-button {
             background: var(--vscode-button-secondaryBackground);
             color: var(--vscode-button-secondaryForeground);
@@ -1693,7 +1753,13 @@ export class ApiTestPanel {
                             <button class="ai-button" onclick="generateWithAI()" id="ai-button" title="AI Smart Generation">🤖 AI Generate</button>
                         </div>
                     </div>
-                    <textarea id="request-body">${bodyJson || ''}</textarea>
+                    <div class="json-editor-container">
+                        <textarea id="request-body" class="json-editor" spellcheck="false">${bodyJson || ''}</textarea>
+                        <div id="json-error-message" class="json-error-message">
+                            <span class="json-error-icon">⚠️</span>
+                            <span id="json-error-text"></span>
+                        </div>
+                    </div>
                 </div>
             </div>
             ` : ''}
@@ -1816,6 +1882,27 @@ export class ApiTestPanel {
                         reparseBtn.disabled = false;
                         reparseBtn.textContent = '🔄 重新解析';
                     }
+                });
+            }
+
+            // 初始化 JSON 编辑器验证
+            const jsonEditor = document.getElementById('request-body');
+            if (jsonEditor) {
+                // 初始验证
+                validateJSON();
+
+                // 添加实时验证(使用防抖)
+                let validationTimeout;
+                jsonEditor.addEventListener('input', () => {
+                    clearTimeout(validationTimeout);
+                    validationTimeout = setTimeout(() => {
+                        validateJSON();
+                    }, 300); // 300ms 防抖
+                });
+
+                // 失去焦点时也验证一次
+                jsonEditor.addEventListener('blur', () => {
+                    validateJSON();
                 });
             }
         });
@@ -2050,8 +2137,64 @@ export class ApiTestPanel {
             try {
                 const parsed = JSON.parse(textarea.value);
                 textarea.value = JSON.stringify(parsed, null, 2);
+                validateJSON(); // Re-validate after formatting
             } catch (error) {
                 alert('Invalid JSON: ' + error.message);
+            }
+        }
+
+        /**
+         * 验证 JSON 格式并显示错误信息
+         */
+        function validateJSON() {
+            const textarea = document.getElementById('request-body');
+            const errorMessage = document.getElementById('json-error-message');
+            const errorText = document.getElementById('json-error-text');
+
+            if (!textarea || !errorMessage || !errorText) {
+                return;
+            }
+
+            const jsonString = textarea.value.trim();
+
+            // 空字符串视为有效
+            if (jsonString === '') {
+                textarea.classList.remove('valid', 'invalid');
+                errorMessage.classList.remove('visible');
+                return;
+            }
+
+            try {
+                // 尝试解析 JSON
+                JSON.parse(jsonString);
+
+                // 解析成功
+                textarea.classList.remove('invalid');
+                textarea.classList.add('valid');
+                errorMessage.classList.remove('visible');
+
+            } catch (error) {
+                // 解析失败
+                textarea.classList.remove('valid');
+                textarea.classList.add('invalid');
+
+                // 提取错误信息
+                let errorMsg = error.message;
+
+                // 尝试提取位置信息
+                const positionMatch = errorMsg.match(/position (\\d+)/);
+                if (positionMatch) {
+                    const position = parseInt(positionMatch[1]);
+                    const lines = jsonString.substring(0, position).split('\\n');
+                    const lineNumber = lines.length;
+                    const columnNumber = lines[lines.length - 1].length + 1;
+                    errorMsg = \`错误的 JSON 格式 (行 \${lineNumber}, 列 \${columnNumber}): \${errorMsg}\`;
+                } else {
+                    errorMsg = \`错误的 JSON 格式: \${errorMsg}\`;
+                }
+
+                errorText.textContent = errorMsg;
+                errorMessage.classList.add('visible');
             }
         }
 
@@ -2099,6 +2242,7 @@ export class ApiTestPanel {
             const textarea = document.getElementById('request-body');
             if (textarea) {
                 textarea.value = originalJsonBody;
+                validateJSON(); // 验证恢复的内容
                 showNotification('✅ Original JSON restored', 'success');
             }
         }
@@ -2139,6 +2283,7 @@ export class ApiTestPanel {
             const textarea = document.getElementById('request-body');
             if (textarea && body) {
                 textarea.value = body;
+                validateJSON(); // 验证新的内容
                 showNotification('✅ Body 内容已更新', 'success');
             }
         }
@@ -2362,6 +2507,9 @@ export class ApiTestPanel {
                 } catch (e) {
                     // Already formatted or invalid
                 }
+
+                // 验证生成的内容
+                validateJSON();
 
                 // Show success message
                 showNotification('✨ AI generated successfully!', 'success');
