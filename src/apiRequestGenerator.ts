@@ -212,7 +212,10 @@ export class ApiRequestGenerator {
             // Check if property type is a complex type that might have nested properties
             const isComplexType = !this.isSimpleType(prop.type);
 
-            if (isComplexType && prop.type.includes('List<')) {
+            // Check if it's a collection type (List, IEnumerable, ICollection, Array, etc.)
+            const isCollectionType = this.isCollectionType(prop.type);
+
+            if (isCollectionType) {
                 // Handle List/array types: generate array with one sample item
                 const innerType = this.extractInnerType(prop.type);
 
@@ -220,7 +223,12 @@ export class ApiRequestGenerator {
                 if (prop.properties && prop.properties.length > 0) {
                     console.log(`[ApiRequestGenerator] Generating array from nested properties for ${prop.name}`);
                     obj[prop.name] = [this.generateObjectFromProperties(prop.properties)];
+                } else if (!this.isSimpleType(innerType)) {
+                    // Inner type is complex but wasn't parsed - return error marker
+                    console.warn(`[ApiRequestGenerator] ⚠️ Collection inner type ${innerType} not parsed for ${prop.name}!`);
+                    obj[prop.name] = [`⚠️ ERROR: Unable to parse type '${innerType}'. Please define this class in your workspace or manually edit the request body.`];
                 } else {
+                    // Simple type array
                     obj[prop.name] = [this.generateSampleValue(innerType, prop.name)];
                 }
             } else if (isComplexType) {
@@ -229,8 +237,13 @@ export class ApiRequestGenerator {
                     console.log(`[ApiRequestGenerator] Generating object from ${prop.properties.length} nested properties for ${prop.name}`);
                     obj[prop.name] = this.generateObjectFromProperties(prop.properties);
                 } else {
-                    // Fallback to generic object generation
-                    obj[prop.name] = this.generateComplexObject(prop.type);
+                    // Complex type not parsed - return error marker instead of fake data
+                    console.warn(`[ApiRequestGenerator] ⚠️ Complex type ${prop.type} not parsed for ${prop.name}!`);
+                    obj[prop.name] = {
+                        "⚠️ ERROR": `Unable to parse type '${prop.type}'`,
+                        "解决方案": "Please define this class in your workspace or manually edit the request body",
+                        "类型": prop.type
+                    };
                 }
             } else {
                 // Generate value based on property name and type
@@ -241,6 +254,19 @@ export class ApiRequestGenerator {
         }
 
         return obj;
+    }
+
+    /**
+     * Check if a type is a collection type (List, IEnumerable, Array, etc.)
+     */
+    private isCollectionType(type: string): boolean {
+        const cleanType = type.replace('?', '').toLowerCase();
+        return cleanType.includes('list<') ||
+               cleanType.includes('ienumerable<') ||
+               cleanType.includes('icollection<') ||
+               cleanType.includes('ilist<') ||
+               cleanType.includes('[]') ||
+               cleanType.includes('array<');
     }
 
     /**

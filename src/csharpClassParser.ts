@@ -78,60 +78,288 @@ export class CSharpClassParser {
     }
 
     /**
+     * Extract using statements from a document
+     * @param document The document to extract using statements from
+     * @returns Array of namespace strings
+     */
+    private extractUsingStatements(document: vscode.TextDocument): string[] {
+        const text = document.getText();
+        const lines = text.split('\n');
+        const usings: string[] = [];
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            // Match: using Namespace.SubNamespace;
+            const usingMatch = trimmed.match(/^using\s+([\w\.]+)\s*;/);
+            if (usingMatch) {
+                usings.push(usingMatch[1]);
+            }
+
+            // Stop when we reach the first class/namespace declaration
+            if (trimmed.startsWith('namespace ') || trimmed.includes('class ')) {
+                break;
+            }
+        }
+
+        console.log(`[CSharpClassParser] 📋 Extracted ${usings.length} using statements: [${usings.join(', ')}]`);
+        return usings;
+    }
+
+    /**
+     * Generate search patterns based on using statements and class name
+     * @param className The class name to search for
+     * @param usingStatements Array of namespace strings
+     * @returns Array of glob patterns to search
+     */
+    private generateSearchPatterns(className: string, usingStatements: string[]): string[] {
+        const patterns: string[] = [];
+
+        // Pattern 1: Direct class file name match
+        patterns.push(`**/${className}.cs`);
+
+        // Pattern 2: Based on using statements, generate namespace-based paths
+        for (const namespace of usingStatements) {
+            // Convert namespace to path: Fy.Hospital.Mobile.Model.VM -> **/Fy.Hospital.Mobile.Model/VM/**/${className}.cs
+            const pathParts = namespace.split('.');
+
+            // Try full namespace path
+            patterns.push(`**/${pathParts.join('/')}/**/${className}.cs`);
+
+            // Try last 2 segments (e.g., Model/VM)
+            if (pathParts.length >= 2) {
+                const lastTwo = pathParts.slice(-2).join('/');
+                patterns.push(`**/${lastTwo}/**/${className}.cs`);
+            }
+
+            // Try last segment (e.g., VM)
+            if (pathParts.length >= 1) {
+                const lastOne = pathParts[pathParts.length - 1];
+                patterns.push(`**/${lastOne}/**/${className}.cs`);
+            }
+        }
+
+        // Remove duplicates
+        const uniquePatterns = Array.from(new Set(patterns));
+        console.log(`[CSharpClassParser] 🔍 Generated ${uniquePatterns.length} search patterns for ${className}`);
+        return uniquePatterns;
+    }
+
+    /**
+     * Search for a class file using intelligent patterns based on using statements
+     * @param className The class name to find
+     * @param currentDocument Current document to extract using statements from
+     * @returns The found document, or null if not found
+     */
+    private async findClassFileByUsing(className: string, currentDocument: vscode.TextDocument): Promise<vscode.TextDocument | null> {
+        // Extract using statements from current document
+        const usingStatements = this.extractUsingStatements(currentDocument);
+
+        // Generate search patterns
+        const patterns = this.generateSearchPatterns(className, usingStatements);
+
+        // Search using each pattern until we find the class
+        for (const pattern of patterns) {
+            console.log(`[CSharpClassParser]   🔍 Trying pattern: ${pattern}`);
+
+            try {
+                const files = await vscode.workspace.findFiles(
+                    pattern,
+                    '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
+                    100 // Limit per pattern to avoid overwhelming
+                );
+
+                console.log(`[CSharpClassParser]     Found ${files.length} files matching pattern`);
+
+                // Check each file to see if it contains the class
+                for (const fileUri of files) {
+                    try {
+                        const document = await vscode.workspace.openTextDocument(fileUri);
+                        const text = document.getText();
+
+                        // Quick check: does this file contain the class definition?
+                        const classRegex = new RegExp(`\\bclass\\s+${className}\\b`);
+                        if (classRegex.test(text)) {
+                            console.log(`[CSharpClassParser]     ✅ Found ${className} in ${fileUri.fsPath}`);
+                            return document;
+                        }
+                    } catch (fileError) {
+                        console.error(`[CSharpClassParser]     ⚠️ Error reading file ${fileUri.fsPath}:`, fileError);
+                        continue;
+                    }
+                }
+            } catch (searchError) {
+                console.error(`[CSharpClassParser]   ❌ Error searching with pattern ${pattern}:`, searchError);
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Parse a C# class definition from workspace files
      * @param className The name of the class to find
      * @param currentDocument The current document (for relative path resolution)
+     * @param recursive Whether to recursively parse nested complex types (default: true)
+     * @param parsedClasses Set of already parsed classes to prevent infinite recursion
+     * @param depth Current recursion depth (for safety)
      * @returns Array of class properties, or null if class not found
      */
-    async parseClassDefinitionFromWorkspace(className: string, currentDocument: vscode.TextDocument): Promise<ClassProperty[] | null> {
-        // Extract inner type if generic
-        const actualClassName = this.extractInnerType(className);
-
-        console.log(`[CSharpClassParser] Searching workspace for class: ${actualClassName}`);
-
-        // Check cache first
-        const cached = this.cache.get(actualClassName);
-        if (cached) {
-            console.log(`[CSharpClassParser] ✅ Cache hit for ${actualClassName} (${cached.properties.length} properties)`);
-            return cached.properties;
-        }
-
-        // First, try the current document (fast path)
-        const propertiesFromCurrent = this.parseClassDefinition(currentDocument, actualClassName);
-        if (propertiesFromCurrent) {
-            return propertiesFromCurrent;
-        }
-
-        // Search in workspace C# files with improved exclusions and error handling
-        try {
-            const files = await vscode.workspace.findFiles(
-                '**/*.cs',
-                '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
-                300 // Increased from 200 to 300 for larger projects
-            );
-            console.log(`[CSharpClassParser] Found ${files.length} C# files in workspace`);
-
-            for (const fileUri of files) {
-                try {
-                    const document = await vscode.workspace.openTextDocument(fileUri);
-                    const properties = this.parseClassDefinition(document, actualClassName);
-                    if (properties && properties.length > 0) {
-                        console.log(`[CSharpClassParser] ✅ Found ${actualClassName} in ${fileUri.fsPath} with ${properties.length} properties`);
-                        return properties;
-                    }
-                } catch (fileError) {
-                    console.error(`[CSharpClassParser] ⚠️ Error reading file ${fileUri.fsPath}:`, fileError);
-                    // Continue with next file instead of stopping
-                    continue;
-                }
-            }
-        } catch (searchError) {
-            console.error(`[CSharpClassParser] ❌ Error searching workspace:`, searchError);
+    async parseClassDefinitionFromWorkspace(
+        className: string,
+        currentDocument: vscode.TextDocument,
+        recursive: boolean = true,
+        parsedClasses: Set<string> = new Set(),
+        depth: number = 0
+    ): Promise<ClassProperty[] | null> {
+        // Safety limit: max recursion depth
+        const MAX_DEPTH = 10;
+        if (depth >= MAX_DEPTH) {
+            console.log(`[CSharpClassParser] ⚠️ Max recursion depth (${MAX_DEPTH}) reached for ${className}`);
             return null;
         }
 
-        console.log(`[CSharpClassParser] ❌ Class ${actualClassName} not found in workspace`);
+        // Extract inner type if generic
+        const actualClassName = this.extractInnerType(className);
+
+        // Skip simple types
+        if (this.isSimpleType(actualClassName)) {
+            return null;
+        }
+
+        // Prevent infinite recursion
+        if (parsedClasses.has(actualClassName)) {
+            console.log(`[CSharpClassParser] 🔄 Skipping already parsed class: ${actualClassName}`);
+            return null;
+        }
+
+        console.log(`[CSharpClassParser] Searching workspace for class: ${actualClassName} (depth: ${depth}, recursive: ${recursive})`);
+
+        // Add to parsed set
+        parsedClasses.add(actualClassName);
+
+        // First, try the current document (fast path)
+        let properties = this.parseClassDefinition(currentDocument, actualClassName);
+        if (properties && properties.length > 0) {
+            // Recursively parse nested complex types if enabled
+            if (recursive) {
+                console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
+                await this.parseNestedComplexTypes(properties, currentDocument, parsedClasses, depth + 1);
+            }
+            return properties;
+        }
+
+        // Use intelligent search based on using statements
+        console.log(`[CSharpClassParser] 🎯 Starting intelligent search based on using statements...`);
+        const foundDocument = await this.findClassFileByUsing(actualClassName, currentDocument);
+
+        if (foundDocument) {
+            properties = this.parseClassDefinition(foundDocument, actualClassName);
+            if (properties && properties.length > 0) {
+                console.log(`[CSharpClassParser] ✅ Found ${actualClassName} with ${properties.length} properties via intelligent search`);
+
+                // Recursively parse nested complex types if enabled
+                if (recursive) {
+                    console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
+                    await this.parseNestedComplexTypes(properties, foundDocument, parsedClasses, depth + 1);
+                }
+
+                return properties;
+            }
+        }
+
+        console.log(`[CSharpClassParser] ❌ Class ${actualClassName} not found via using-based search`);
         return null;
+    }
+
+    /**
+     * Recursively parse nested complex types in properties
+     * @param properties Array of properties to analyze
+     * @param currentDocument Current document for searching
+     * @param parsedClasses Set of already parsed classes
+     * @param depth Current recursion depth
+     */
+    private async parseNestedComplexTypes(
+        properties: ClassProperty[],
+        currentDocument: vscode.TextDocument,
+        parsedClasses: Set<string>,
+        depth: number
+    ): Promise<void> {
+        console.log(`[CSharpClassParser] 🔍 parseNestedComplexTypes called with ${properties.length} properties at depth ${depth}`);
+        console.log(`[CSharpClassParser] 📋 parsedClasses contains: [${Array.from(parsedClasses).join(', ')}]`);
+
+        // Build a map to store parsed results for reuse
+        const parsedResults = new Map<string, ClassProperty[]>();
+
+        for (const prop of properties) {
+            // Extract the actual type (handle List<T>, IEnumerable<T>, T[], T?, etc.)
+            const baseType = this.extractBaseType(prop.type);
+
+            console.log(`[CSharpClassParser]   - Property ${prop.name} (type: ${prop.type}, baseType: ${baseType})`);
+
+            // Skip if it's a simple type
+            if (this.isSimpleType(baseType)) {
+                console.log(`[CSharpClassParser]     ✓ Skipped (simple type)`);
+                continue;
+            }
+
+            // Check if we already parsed this type in this batch
+            if (parsedResults.has(baseType)) {
+                console.log(`[CSharpClassParser]     ♻️ Reusing already parsed results for ${baseType}`);
+                prop.properties = parsedResults.get(baseType)!;
+                console.log(`[CSharpClassParser]     ✅ Reused ${prop.properties.length} properties for ${prop.name}`);
+                continue;
+            }
+
+            // Skip if already parsed in previous recursion levels (prevent infinite loops)
+            if (parsedClasses.has(baseType)) {
+                console.log(`[CSharpClassParser]     ⏭️ Skipped ${baseType} (already in parsedClasses, prevents circular reference)`);
+                continue;
+            }
+
+            console.log(`[CSharpClassParser]     🔄 Recursively parsing ${baseType}...`);
+
+            // Recursively parse the nested type
+            const nestedProperties = await this.parseClassDefinitionFromWorkspace(
+                baseType,
+                currentDocument,
+                true,
+                parsedClasses,
+                depth
+            );
+
+            // Attach nested properties to the property and cache for reuse
+            if (nestedProperties && nestedProperties.length > 0) {
+                prop.properties = nestedProperties;
+                parsedResults.set(baseType, nestedProperties);  // Cache for reuse in this batch
+                console.log(`[CSharpClassParser]     ✅ Attached ${nestedProperties.length} nested properties to ${prop.name}`);
+            } else {
+                console.log(`[CSharpClassParser]     ⚠️ WARNING: No nested properties found for ${baseType} in ${prop.name}!`);
+            }
+        }
+
+        console.log(`[CSharpClassParser] ✅ parseNestedComplexTypes completed for ${properties.length} properties`);
+    }
+
+    /**
+     * Extract base type from complex types (List<T>, T[], T?, etc.)
+     */
+    private extractBaseType(type: string): string {
+        // Remove nullable marker
+        let baseType = type.replace('?', '');
+
+        // Handle array types: User[] -> User
+        if (baseType.endsWith('[]')) {
+            return baseType.slice(0, -2);
+        }
+
+        // Handle generic types: List<User>, IEnumerable<Product>, etc.
+        const genericMatch = baseType.match(/<(.+)>/);
+        if (genericMatch) {
+            return genericMatch[1].trim();
+        }
+
+        return baseType;
     }
 
     private findClassDefinition(lines: string[], className: string): number {
@@ -406,34 +634,19 @@ export class CSharpClassParser {
             return definitionFromCurrent;
         }
 
-        // Search in workspace C# files with improved error handling
-        try {
-            const files = await vscode.workspace.findFiles(
-                '**/*.cs',
-                '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
-                300 // Increased from 200 to 300 for larger projects
-            );
+        // Use intelligent search based on using statements
+        console.log(`[CSharpClassParser] 🎯 Starting intelligent search for class definition using using statements...`);
+        const foundDocument = await this.findClassFileByUsing(actualClassName, currentDocument);
 
-            for (const fileUri of files) {
-                try {
-                    const document = await vscode.workspace.openTextDocument(fileUri);
-                    const definition = this.getClassDefinitionText(document, actualClassName);
-                    if (definition) {
-                        console.log(`[CSharpClassParser] ✅ Found definition for ${actualClassName} in ${fileUri.fsPath}`);
-                        return definition;
-                    }
-                } catch (fileError) {
-                    console.error(`[CSharpClassParser] ⚠️ Error reading file ${fileUri.fsPath}:`, fileError);
-                    // Continue with next file instead of stopping
-                    continue;
-                }
+        if (foundDocument) {
+            const definition = this.getClassDefinitionText(foundDocument, actualClassName);
+            if (definition) {
+                console.log(`[CSharpClassParser] ✅ Found definition for ${actualClassName} via intelligent search`);
+                return definition;
             }
-        } catch (searchError) {
-            console.error(`[CSharpClassParser] ❌ Error searching workspace:`, searchError);
-            return null;
         }
 
-        console.log(`[CSharpClassParser] ❌ Definition for ${actualClassName} not found in workspace`);
+        console.log(`[CSharpClassParser] ❌ Definition for ${actualClassName} not found via using-based search`);
         return null;
     }
 

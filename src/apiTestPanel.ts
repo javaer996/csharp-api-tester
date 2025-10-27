@@ -266,9 +266,38 @@ export class ApiTestPanel {
                     message: `⚡ 正在解析 ${param.type}...`
                 });
 
-                // Parse recursively
-                console.log(`[ApiTestPanel] 📦 Parsing ${param.type}...`);
-                await this.parseClassRecursively(param.type, param, document, classParser, parsedClasses);
+                // Parse with full recursive support (CSharpClassParser now handles all recursion)
+                console.log(`[ApiTestPanel] 📦 Parsing ${param.type} with full recursion...`);
+                try {
+                    const properties = await classParser.parseClassDefinitionFromWorkspace(
+                        param.type,
+                        document,
+                        true, // Enable recursive parsing
+                        parsedClasses,
+                        0 // Start at depth 0
+                    );
+
+                    // Check cancellation after async operation
+                    if (this._parsingCancelled) {
+                        console.log('[ApiTestPanel] 🚫 Parsing cancelled after class definition parse');
+                        return;
+                    }
+
+                    if (properties && properties.length > 0) {
+                        param.properties = properties;
+                        console.log(`[ApiTestPanel] ✅ Parsed ${properties.length} properties for ${param.type} (including nested)`);
+                    } else {
+                        console.log(`[ApiTestPanel] ⚠️ No properties found for ${param.type}`);
+                    }
+
+                    // Get full class definition for AI context
+                    const classDefinition = await classParser.getClassDefinitionTextFromWorkspace(param.type, document);
+                    if (classDefinition) {
+                        param.classDefinition = classDefinition;
+                    }
+                } catch (error) {
+                    console.error(`[ApiTestPanel] ❌ Failed to parse ${param.type}:`, error);
+                }
             }
         }
 
@@ -316,126 +345,6 @@ export class ApiTestPanel {
                 });
             }
         }
-    }
-
-    /**
-     * Recursively parse class definitions and nested classes
-     */
-    private async parseClassRecursively(
-        className: string,
-        target: any,
-        document: vscode.TextDocument,
-        classParser: any,
-        parsedClasses: Set<string>
-    ): Promise<void> {
-        // Check cancellation at the start
-        if (this._parsingCancelled) {
-            console.log('[ApiTestPanel] 🚫 Parsing cancelled, skip recursion');
-            return;
-        }
-
-        // Avoid infinite recursion
-        if (parsedClasses.has(className)) {
-            return;
-        }
-
-        // Check if it's a simple type
-        const isSimpleType = ['string', 'int', 'long', 'short', 'byte', 'bool', 'DateTime', 'DateTimeOffset', 'Guid', 'decimal', 'double', 'float'].includes(className);
-        if (isSimpleType) {
-            return;
-        }
-
-        console.log(`[ApiTestPanel] 📦 Parsing class: ${className}`);
-
-        try {
-            // Parse class properties
-            const properties = await classParser.parseClassDefinitionFromWorkspace(className, document);
-
-            // Check cancellation after async operation
-            if (this._parsingCancelled) {
-                console.log('[ApiTestPanel] 🚫 Parsing cancelled after parsing class definition');
-                return;
-            }
-
-            if (properties && properties.length > 0) {
-                target.properties = properties;
-
-                // Add to parsed set only after successful parsing
-                parsedClasses.add(className);
-
-                console.log(`[ApiTestPanel] ✅ Found ${properties.length} properties for ${className}`);
-
-                // Recursively parse nested complex types
-                for (const prop of properties) {
-                    // Check cancellation during recursion
-                    if (this._parsingCancelled) {
-                        console.log('[ApiTestPanel] 🚫 Parsing cancelled during property recursion');
-                        return;
-                    }
-
-                    const propType = this.extractBaseType(prop.type);
-                    const isComplexType = !this.isSimpleType(propType);
-
-                    if (isComplexType && !parsedClasses.has(propType)) {
-                        console.log(`[ApiTestPanel] 🔄 Found nested class: ${propType} in property ${prop.name}`);
-
-                        // Ensure properties object exists for nested types
-                        if (!prop.properties) {
-                            await this.parseClassRecursively(propType, prop, document, classParser, parsedClasses);
-                        }
-                    }
-                }
-            } else {
-                console.log(`[ApiTestPanel] ⚠️ No properties found for ${className}, will retry on next parse`);
-            }
-
-            // Get full class definition for AI context
-            const classDefinition = await classParser.getClassDefinitionTextFromWorkspace(className, document);
-            if (classDefinition) {
-                target.classDefinition = classDefinition;
-            }
-        } catch (error) {
-            console.error(`[ApiTestPanel] ❌ Failed to parse ${className}:`, error);
-        }
-    }
-
-    /**
-     * Extract base type from generic types (List<T>, IEnumerable<T>, etc.)
-     */
-    private extractBaseType(type: string): string {
-        // Handle array types: User[] -> User
-        if (type.endsWith('[]')) {
-            return type.slice(0, -2);
-        }
-
-        // Handle generic types: List<User> -> User
-        const genericMatch = type.match(/<(.+)>/);
-        if (genericMatch) {
-            return genericMatch[1].trim();
-        }
-
-        // Handle nullable types: User? -> User
-        if (type.endsWith('?')) {
-            return type.slice(0, -1);
-        }
-
-        return type;
-    }
-
-    /**
-     * Check if a type is a simple/primitive type
-     */
-    private isSimpleType(type: string): boolean {
-        const simpleTypes = [
-            'string', 'int', 'long', 'short', 'byte',
-            'uint', 'ulong', 'ushort', 'sbyte',
-            'double', 'float', 'decimal',
-            'bool', 'DateTime', 'DateTimeOffset',
-            'Guid', 'char', 'object'
-        ];
-
-        const baseType = type.replace('?', '').replace('[]', '');
-        return simpleTypes.includes(baseType);
     }
 
     private async testApi(requestData: any) {
