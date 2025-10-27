@@ -20,6 +20,7 @@ export class ApiTestPanel {
     private _lastAIConversation: any | null = null; // Store conversation for this panel
 
     private _parsingCancelled: boolean = false;
+    private _sourceDocument: vscode.TextDocument | undefined;
 
     public static createOrShow(extensionUri: vscode.Uri, endpoint?: ApiEndpointInfo) {
         const column = vscode.window.activeTextEditor
@@ -137,6 +138,10 @@ export class ApiTestPanel {
                             console.log(`[ApiTestPanel] ❌ Processing cancelParsing`);
                             this.cancelParsing();
                             break;
+                        case 'reparseBodyParams':
+                            console.log(`[ApiTestPanel] 🔄 Processing reparseBodyParams`);
+                            await this.reparseBodyParameters();
+                            break;
                         default:
                             console.log(`[ApiTestPanel] ❓ Unknown message type:`, message.type);
                     }
@@ -173,6 +178,9 @@ export class ApiTestPanel {
             return;
         }
 
+        // 保存当前的 document 供后续解析使用
+        this._sourceDocument = vscode.window.activeTextEditor?.document;
+
         const fullBaseUrl = currentEnvironment.baseUrl;
         const fullHeaders = currentEnvironment.headers;
 
@@ -190,22 +198,27 @@ export class ApiTestPanel {
 
     /**
      * ⚡ Parse class definitions in background (non-blocking)
+     * @param force - Force reparsing even if properties already exist
      */
-    private async parseEndpointClassDefinitionsInBackground() {
+    private async parseEndpointClassDefinitionsInBackground(force: boolean = false) {
         if (!this._currentEndpoint) return;
 
         // Reset cancellation flag
         this._parsingCancelled = false;
 
         // Check if there are body/form parameters that need parsing
-        const needsParsing = this._currentEndpoint.parameters.some(p =>
-            (p.source === 'body' || p.source === 'form') &&
-            (!p.properties || p.properties.length === 0)
-        );
+        if (!force) {
+            const needsParsing = this._currentEndpoint.parameters.some(p =>
+                (p.source === 'body' || p.source === 'form') &&
+                (!p.properties || p.properties.length === 0)
+            );
 
-        if (!needsParsing) {
-            console.log('[ApiTestPanel] ⚡ No parsing needed, all parameters already parsed');
-            return;
+            if (!needsParsing) {
+                console.log('[ApiTestPanel] ⚡ No parsing needed, all parameters already parsed');
+                return;
+            }
+        } else {
+            console.log('[ApiTestPanel] 🔄 Force reparsing requested');
         }
 
         console.log('[ApiTestPanel] ⚡ Starting background parsing...');
@@ -216,9 +229,14 @@ export class ApiTestPanel {
             message: '正在解析参数类型...'
         });
 
-        const document = vscode.window.activeTextEditor?.document;
+        // 使用保存的 document 而不是 activeTextEditor.document
+        const document = this._sourceDocument;
         if (!document) {
-            this._panel.webview.postMessage({ type: 'parsingComplete' });
+            console.log('[ApiTestPanel] ⚠️ No source document available');
+            this._panel.webview.postMessage({
+                type: 'parsingFailed',
+                message: '无法获取源文件，请重新打开测试面板'
+            });
             return;
         }
 
@@ -240,20 +258,12 @@ export class ApiTestPanel {
                 return;
             }
 
-            // Only parse if it's a body/form parameter AND hasn't been successfully parsed yet
+            // Only parse if it's a body/form parameter
             if ((param.source === 'body' || param.source === 'form')) {
-                // Check if already parsed successfully (has properties with length > 0)
-                const alreadyParsed = param.properties && param.properties.length > 0;
-
-                if (alreadyParsed) {
-                    console.log(`[ApiTestPanel] ⚡ Using cached properties for ${param.type} (${param.properties!.length} properties)`);
-                    continue;
-                }
-
                 // Send progress update
                 this._panel.webview.postMessage({
                     type: 'parsingStatus',
-                    message: `正在解析 ${param.type}...`
+                    message: `⚡ 正在解析 ${param.type}...`
                 });
 
                 // Parse recursively
@@ -263,6 +273,12 @@ export class ApiTestPanel {
         }
 
         console.log('[ApiTestPanel] ✅ Class definitions parsing complete');
+
+        // Check if parsing was cancelled
+        if (this._parsingCancelled) {
+            console.log('[ApiTestPanel] 🚫 Parsing was cancelled, skip completion logic');
+            return;
+        }
 
         // Check if parsing was successful (any parameter has valid properties)
         let hasValidProperties = false;
@@ -312,6 +328,12 @@ export class ApiTestPanel {
         classParser: any,
         parsedClasses: Set<string>
     ): Promise<void> {
+        // Check cancellation at the start
+        if (this._parsingCancelled) {
+            console.log('[ApiTestPanel] 🚫 Parsing cancelled, skip recursion');
+            return;
+        }
+
         // Avoid infinite recursion
         if (parsedClasses.has(className)) {
             return;
@@ -323,18 +345,34 @@ export class ApiTestPanel {
             return;
         }
 
-        parsedClasses.add(className);
         console.log(`[ApiTestPanel] 📦 Parsing class: ${className}`);
 
         try {
             // Parse class properties
             const properties = await classParser.parseClassDefinitionFromWorkspace(className, document);
+
+            // Check cancellation after async operation
+            if (this._parsingCancelled) {
+                console.log('[ApiTestPanel] 🚫 Parsing cancelled after parsing class definition');
+                return;
+            }
+
             if (properties && properties.length > 0) {
                 target.properties = properties;
+
+                // Add to parsed set only after successful parsing
+                parsedClasses.add(className);
+
                 console.log(`[ApiTestPanel] ✅ Found ${properties.length} properties for ${className}`);
 
                 // Recursively parse nested complex types
                 for (const prop of properties) {
+                    // Check cancellation during recursion
+                    if (this._parsingCancelled) {
+                        console.log('[ApiTestPanel] 🚫 Parsing cancelled during property recursion');
+                        return;
+                    }
+
                     const propType = this.extractBaseType(prop.type);
                     const isComplexType = !this.isSimpleType(propType);
 
@@ -347,6 +385,8 @@ export class ApiTestPanel {
                         }
                     }
                 }
+            } else {
+                console.log(`[ApiTestPanel] ⚠️ No properties found for ${className}, will retry on next parse`);
             }
 
             // Get full class definition for AI context
@@ -736,6 +776,27 @@ export class ApiTestPanel {
     private cancelParsing(): void {
         console.log('[ApiTestPanel] Setting cancellation flag...');
         this._parsingCancelled = true;
+    }
+
+    private async reparseBodyParameters(): Promise<void> {
+        if (!this._currentEndpoint) {
+            console.log('[ApiTestPanel] No endpoint, cannot reparse');
+            return;
+        }
+
+        console.log('[ApiTestPanel] 🔄 Starting reparsing...');
+
+        // 清空 body/form 参数的 properties 缓存
+        for (const param of this._currentEndpoint.parameters) {
+            if (param.source === 'body' || param.source === 'form') {
+                console.log(`[ApiTestPanel] Clearing properties cache for ${param.type}`);
+                param.properties = undefined;
+                param.classDefinition = undefined;
+            }
+        }
+
+        // 重新触发后台解析(强制解析)
+        await this.parseEndpointClassDefinitionsInBackground(true);
     }
 
     private getWelcomeHtml(): string {
@@ -1624,6 +1685,7 @@ export class ApiTestPanel {
                     <div class="body-editor-toolbar">
                         <div class="body-editor-toolbar-left">
                             <button class="restore-button" onclick="restoreOriginalJson()" title="Restore Original JSON">↺ Restore</button>
+                            <button class="format-button" onclick="reparseBodyParams()" title="重新解析参数" id="reparse-btn">🔄 重新解析</button>
                             <button class="view-conversation-button" onclick="viewAIConversation()" title="View AI Conversation">💬 View AI</button>
                         </div>
                         <div class="body-editor-toolbar-right">
@@ -1747,6 +1809,13 @@ export class ApiTestPanel {
                     console.log('[Webview] Cancel parsing button clicked');
                     vscode.postMessage({ type: 'cancelParsing' });
                     hideParsingStatus();
+
+                    // 恢复重新解析按钮状态
+                    const reparseBtn = document.getElementById('reparse-btn');
+                    if (reparseBtn) {
+                        reparseBtn.disabled = false;
+                        reparseBtn.textContent = '🔄 重新解析';
+                    }
                 });
             }
         });
@@ -2074,6 +2143,22 @@ export class ApiTestPanel {
             }
         }
 
+        function reparseBodyParams() {
+            console.log('[Webview] Reparse body params clicked');
+
+            // 禁用按钮防止重复点击
+            const btn = document.getElementById('reparse-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '🔄 解析中...';
+            }
+
+            // 发送重新解析消息
+            vscode.postMessage({
+                type: 'reparseBodyParams'
+            });
+        }
+
         // Close conversation modal
         function closeConversationModal() {
             const modal = document.getElementById('conversation-modal');
@@ -2225,12 +2310,33 @@ export class ApiTestPanel {
             } else if (message.type === 'parsingComplete') {
                 hideParsingStatus();
                 showNotification('✅ ' + (message.message || '参数解析完成!'), 'success');
+
+                // 恢复重新解析按钮
+                const reparseBtn = document.getElementById('reparse-btn');
+                if (reparseBtn) {
+                    reparseBtn.disabled = false;
+                    reparseBtn.textContent = '🔄 重新解析';
+                }
             } else if (message.type === 'parsingCancelled') {
                 hideParsingStatus();
                 showNotification('❌ ' + (message.message || '解析已取消'), 'info');
+
+                // 恢复重新解析按钮
+                const reparseBtn = document.getElementById('reparse-btn');
+                if (reparseBtn) {
+                    reparseBtn.disabled = false;
+                    reparseBtn.textContent = '🔄 重新解析';
+                }
             } else if (message.type === 'parsingFailed') {
                 hideParsingStatus();
                 showNotification('⚠️ ' + (message.message || '参数解析失败'), 'error');
+
+                // 恢复重新解析按钮
+                const reparseBtn = document.getElementById('reparse-btn');
+                if (reparseBtn) {
+                    reparseBtn.disabled = false;
+                    reparseBtn.textContent = '🔄 重新解析';
+                }
             } else if (message.type === 'updateBodyContent') {
                 updateBodyContent(message.body);
             }
