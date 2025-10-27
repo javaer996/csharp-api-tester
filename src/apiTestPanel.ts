@@ -1214,14 +1214,7 @@ export class ApiTestPanel {
             border-color: #49CC90;
         }
 
-        /* JSON Syntax Highlighting */
-        .json-key { color: #9CDCFE; }
-        .json-string { color: #CE9178; }
-        .json-number { color: #B5CEA8; }
-        .json-boolean { color: #569CD6; }
-        .json-null { color: #569CD6; }
-
-        /* JSON Editor Highlighting */
+        /* JSON Editor */
         .json-editor-container {
             position: relative;
             flex: 1;
@@ -1465,6 +1458,84 @@ export class ApiTestPanel {
         .value-editor-modal textarea:focus {
             outline: none;
             border-color: #49CC90;
+        }
+
+        /* Fullscreen Editor Modal */
+        .fullscreen-editor-modal {
+            width: 95%;
+            max-width: 1400px;
+            height: 90%;
+            max-height: 90vh;
+        }
+
+        .fullscreen-editor-body {
+            display: flex;
+            flex-direction: column;
+            padding: 0 !important;
+            height: 100%;
+        }
+
+        .fullscreen-toolbar {
+            padding: 10px 15px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            display: flex;
+            gap: 8px;
+        }
+
+        .fullscreen-editor-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            overflow: hidden;
+        }
+
+        .fullscreen-editor-container .json-editor {
+            flex: 1;
+            width: 100%;
+            min-height: 400px;
+            padding: 15px;
+            border: 1px solid var(--vscode-input-border);
+            background-color: var(--vscode-textCodeBlock-background);
+            color: var(--vscode-editor-foreground);
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            resize: none;
+            transition: border-color 0.3s;
+        }
+
+        .fullscreen-editor-container .json-editor:focus {
+            outline: none;
+            border-color: #49CC90;
+        }
+
+        .fullscreen-editor-container .json-editor.valid {
+            border-color: #49CC90;
+        }
+
+        .fullscreen-editor-container .json-editor.invalid {
+            border-color: #F93E3E;
+        }
+
+        .modal-footer {
+            padding: 15px 20px;
+            border-top: 1px solid var(--vscode-panel-border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            background: var(--vscode-editor-background);
+        }
+
+        .modal-footer button {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
         }
 
         .value-editor-actions {
@@ -1751,6 +1822,7 @@ export class ApiTestPanel {
                         <div class="body-editor-toolbar-right">
                             <button class="format-button" onclick="formatBodyJson()" title="Format JSON">{ } Format</button>
                             <button class="ai-button" onclick="generateWithAI()" id="ai-button" title="AI Smart Generation">🤖 AI Generate</button>
+                            <button class="format-button" onclick="openFullscreenEditor()" title="Fullscreen Editor">⛶ Fullscreen</button>
                         </div>
                     </div>
                     <div class="json-editor-container">
@@ -1849,6 +1921,33 @@ export class ApiTestPanel {
         </div>
     </div>
 
+    <!-- Fullscreen Body Editor Modal -->
+    <div class="modal-overlay" id="fullscreen-editor-modal">
+        <div class="modal-content fullscreen-editor-modal">
+            <div class="modal-header">
+                <h2>📝 Request Body Editor - Fullscreen</h2>
+                <button class="modal-close" onclick="closeFullscreenEditor()">×</button>
+            </div>
+            <div class="modal-body fullscreen-editor-body">
+                <div class="fullscreen-toolbar">
+                    <button class="format-button" onclick="formatFullscreenJson()" title="Format JSON">{ } Format</button>
+                    <button class="format-button" onclick="validateFullscreenJson()" title="Validate JSON">✓ Validate</button>
+                </div>
+                <div class="fullscreen-editor-container">
+                    <textarea id="fullscreen-body-editor" class="json-editor" spellcheck="false" placeholder="Enter JSON here..."></textarea>
+                    <div id="fullscreen-json-error" class="json-error-message">
+                        <span class="json-error-icon">⚠️</span>
+                        <span id="fullscreen-json-error-text"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="value-editor-cancel" onclick="closeFullscreenEditor()">Cancel</button>
+                <button class="value-editor-save" onclick="applyFullscreenChanges()">Apply</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Initialize VS Code API
         const vscode = acquireVsCodeApi();
@@ -1903,6 +2002,24 @@ export class ApiTestPanel {
                 // 失去焦点时也验证一次
                 jsonEditor.addEventListener('blur', () => {
                     validateJSON();
+                });
+            }
+
+            // 初始化全屏编辑器验证
+            const fullscreenEditor = document.getElementById('fullscreen-body-editor');
+            if (fullscreenEditor) {
+                // 添加实时验证(使用防抖)
+                let fullscreenValidationTimeout;
+                fullscreenEditor.addEventListener('input', () => {
+                    clearTimeout(fullscreenValidationTimeout);
+                    fullscreenValidationTimeout = setTimeout(() => {
+                        validateFullscreenJson();
+                    }, 300); // 300ms 防抖
+                });
+
+                // 失去焦点时也验证一次
+                fullscreenEditor.addEventListener('blur', () => {
+                    validateFullscreenJson();
                 });
             }
         });
@@ -2394,6 +2511,146 @@ export class ApiTestPanel {
 
             closeValueEditor();
             showNotification('✅ Value updated', 'success');
+        }
+
+        // Fullscreen Editor Functions
+        function openFullscreenEditor() {
+            const modal = document.getElementById('fullscreen-editor-modal');
+            const fullscreenEditor = document.getElementById('fullscreen-body-editor');
+            const mainEditor = document.getElementById('request-body');
+
+            if (!modal || !fullscreenEditor || !mainEditor) {
+                console.error('[Fullscreen] Elements not found');
+                return;
+            }
+
+            // Copy content from main editor to fullscreen editor
+            fullscreenEditor.value = mainEditor.value;
+
+            // Validate the copied content
+            validateFullscreenJson();
+
+            // Show modal
+            modal.classList.add('visible');
+
+            // Focus on editor
+            setTimeout(() => fullscreenEditor.focus(), 100);
+
+            // Add ESC key listener
+            document.addEventListener('keydown', handleFullscreenEscape);
+        }
+
+        function closeFullscreenEditor() {
+            const modal = document.getElementById('fullscreen-editor-modal');
+            if (modal) {
+                modal.classList.remove('visible');
+            }
+
+            // Remove ESC key listener
+            document.removeEventListener('keydown', handleFullscreenEscape);
+        }
+
+        function handleFullscreenEscape(event) {
+            if (event.key === 'Escape') {
+                closeFullscreenEditor();
+            }
+        }
+
+        function applyFullscreenChanges() {
+            const fullscreenEditor = document.getElementById('fullscreen-body-editor');
+            const mainEditor = document.getElementById('request-body');
+
+            if (!fullscreenEditor || !mainEditor) {
+                console.error('[Fullscreen] Editors not found');
+                return;
+            }
+
+            // Validate before applying
+            const errorDiv = document.getElementById('fullscreen-json-error');
+            if (errorDiv && errorDiv.classList.contains('visible')) {
+                const confirmApply = confirm('JSON 格式有错误，确定要应用更改吗？');
+                if (!confirmApply) {
+                    return;
+                }
+            }
+
+            // Copy content from fullscreen to main editor
+            mainEditor.value = fullscreenEditor.value;
+
+            // Validate main editor
+            validateJSON();
+
+            // Close modal
+            closeFullscreenEditor();
+
+            // Show success notification
+            showNotification('✅ Changes applied', 'success');
+        }
+
+        function formatFullscreenJson() {
+            const editor = document.getElementById('fullscreen-body-editor');
+            if (!editor) return;
+
+            try {
+                const parsed = JSON.parse(editor.value);
+                editor.value = JSON.stringify(parsed, null, 2);
+                validateFullscreenJson();
+                showNotification('✅ JSON formatted', 'success');
+            } catch (error) {
+                showNotification('❌ Invalid JSON: ' + error.message, 'error');
+            }
+        }
+
+        function validateFullscreenJson() {
+            const editor = document.getElementById('fullscreen-body-editor');
+            const errorMessage = document.getElementById('fullscreen-json-error');
+            const errorText = document.getElementById('fullscreen-json-error-text');
+
+            if (!editor || !errorMessage || !errorText) {
+                return;
+            }
+
+            const jsonString = editor.value.trim();
+
+            // Empty string is valid
+            if (jsonString === '') {
+                editor.classList.remove('valid', 'invalid');
+                errorMessage.classList.remove('visible');
+                return;
+            }
+
+            try {
+                // Try to parse JSON
+                JSON.parse(jsonString);
+
+                // Success
+                editor.classList.remove('invalid');
+                editor.classList.add('valid');
+                errorMessage.classList.remove('visible');
+
+            } catch (error) {
+                // Parsing failed
+                editor.classList.remove('valid');
+                editor.classList.add('invalid');
+
+                // Extract error info
+                let errorMsg = error.message;
+
+                // Try to extract position
+                const positionMatch = errorMsg.match(/position (\\d+)/);
+                if (positionMatch) {
+                    const position = parseInt(positionMatch[1]);
+                    const lines = jsonString.substring(0, position).split('\\n');
+                    const lineNumber = lines.length;
+                    const columnNumber = lines[lines.length - 1].length + 1;
+                    errorMsg = \`错误的 JSON 格式 (行 \${lineNumber}, 列 \${columnNumber}): \${errorMsg}\`;
+                } else {
+                    errorMsg = \`错误的 JSON 格式: \${errorMsg}\`;
+                }
+
+                errorText.textContent = errorMsg;
+                errorMessage.classList.add('visible');
+            }
         }
 
         // Send request
