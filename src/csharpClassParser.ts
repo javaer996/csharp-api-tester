@@ -152,6 +152,34 @@ export class CSharpClassParser {
     }
 
     /**
+     * Get search file limit based on configured strategy
+     * @param pattern The search pattern to get limit for
+     * @returns The maximum number of files to search
+     */
+    private getSearchFileLimit(pattern?: string): number {
+        const config = vscode.workspace.getConfiguration('csharpApiTester');
+        const strategy = config.get<string>('searchStrategy', 'balanced');
+
+        // For specific patterns (non-global), use smaller limit
+        if (pattern && pattern !== '**/*.cs') {
+            return 200;
+        }
+
+        switch (strategy) {
+            case 'fast':
+                return 500;
+            case 'balanced':
+                return 1000;
+            case 'thorough':
+                return 2000;
+            case 'custom':
+                return config.get<number>('searchFileLimit', 2000);
+            default:
+                return 1000;
+        }
+    }
+
+    /**
      * Generate search patterns based on using statements and class name
      * @param className The class name to search for
      * @param usingStatements Array of namespace strings
@@ -213,14 +241,16 @@ export class CSharpClassParser {
         for (const pattern of patterns) {
             console.log(`[CSharpClassParser]   🔍 Trying pattern: ${pattern}`);
 
+            // Get file limit for this pattern
+            const fileLimit = this.getSearchFileLimit(pattern);
+            console.log(`[CSharpClassParser]     Using search limit: ${fileLimit} files`);
+
             try {
-                // For global patterns like **/*.cs, use a higher limit and add more exclusions
+                // For global patterns like **/*.cs, use optimized exclusions
                 const isGlobalPattern = pattern === '**/*.cs';
                 const excludePattern = isGlobalPattern
                     ? '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**,**/test/**,**/tests/**,**/Test/**,**/Tests/**,**/__tests__/**'
                     : '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**';
-
-                const fileLimit = isGlobalPattern ? 500 : 100;
 
                 const files = await vscode.workspace.findFiles(
                     pattern,
@@ -229,6 +259,13 @@ export class CSharpClassParser {
                 );
 
                 console.log(`[CSharpClassParser]     Found ${files.length} files matching pattern`);
+
+                // If we hit the limit, warn the user
+                if (files.length >= fileLimit && isGlobalPattern) {
+                    const config = vscode.workspace.getConfiguration('csharpApiTester');
+                    const strategy = config.get<string>('searchStrategy', 'balanced');
+                    console.warn(`[CSharpClassParser]   ⚠️ Reached search limit of ${fileLimit} files. Class not found. Consider changing searchStrategy to 'thorough' or 'custom'.`);
+                }
 
                 // If no files found and this is a global search, skip to next pattern
                 if (files.length === 0 && isGlobalPattern) {

@@ -164,6 +164,17 @@
           "type": "boolean",
           "default": true,
           "description": "Enable automatic API endpoint detection and CodeLens"
+        },
+        "csharpApiTester.searchStrategy": {
+          "type": "string",
+          "enum": ["fast", "balanced", "thorough", "custom"],
+          "default": "balanced",
+          "description": "Search strategy for finding class definitions: fast (500 files), balanced (1000 files), thorough (2000 files), custom (use searchFileLimit)"
+        },
+        "csharpApiTester.searchFileLimit": {
+          "type": "number",
+          "default": 2000,
+          "description": "Maximum number of .cs files to search when looking for class definitions (only used when searchStrategy is 'custom')"
         }
       }
     }

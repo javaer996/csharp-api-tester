@@ -185,7 +185,8 @@ export class ApiTestPanel {
         const fullHeaders = currentEnvironment.headers;
 
         // Generate initial request (may not have full class properties yet)
-        const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment);
+        // 初始渲染时不包含错误信息，避免在类还没解析完成时就显示错误
+        const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, true);
 
         // Render complete UI immediately (no full-screen loading)
         this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, generatedRequest, fullHeaders, currentEnvironment);
@@ -297,6 +298,11 @@ export class ApiTestPanel {
                     }
                 } catch (error) {
                     console.error(`[ApiTestPanel] ❌ Failed to parse ${param.type}:`, error);
+                    // 向 UI 发送错误消息
+                    this._panel.webview.postMessage({
+                        type: 'parsingStatus',
+                        message: `❌ 解析失败: ${param.type} - ${error}`
+                    });
                 }
             }
         }
@@ -311,37 +317,60 @@ export class ApiTestPanel {
 
         // Check if parsing was successful (any parameter has valid properties)
         let hasValidProperties = false;
+        let failedClasses: string[] = [];
         for (const param of this._currentEndpoint.parameters) {
-            if ((param.source === 'body' || param.source === 'form') &&
-                param.properties && param.properties.length > 0) {
-                hasValidProperties = true;
-                break;
+            if ((param.source === 'body' || param.source === 'form')) {
+                if (param.properties && param.properties.length > 0) {
+                    hasValidProperties = true;
+                } else {
+                    // 记录失败的类
+                    failedClasses.push(param.type);
+                }
             }
         }
 
         // Regenerate request body with parsed properties
         const currentEnvironment = this._environmentManager.getCurrentEnvironment();
         if (currentEnvironment) {
-            const updatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment);
+            // 解析完成后，重新生成请求，这次包含错误信息（如果解析失败）
+            const updatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, false);
 
-            if (!hasValidProperties || !updatedRequest.body) {
-                // 解析失败或无法生成 body
-                console.log('[ApiTestPanel] ⚠️ Parsing failed or no valid body generated');
+            // 检查是否有错误（通过 errors 数组判断）
+            const hasErrors = updatedRequest.errors && updatedRequest.errors.length > 0;
+
+            // 只有在没有有效属性且没有body，或者存在错误时，才发送 parsingFailed
+            if ((!hasValidProperties && !updatedRequest.body) || hasErrors) {
+                console.log('[ApiTestPanel] ⚠️ Parsing failed or errors detected');
+
+                // 构建详细的错误消息
+                let errorMessage = '无法解析参数类型定义';
+                if (failedClasses.length > 0) {
+                    errorMessage += `\n失败的类: ${failedClasses.join(', ')}`;
+                }
+                if (hasErrors) {
+                    errorMessage += `\n错误详情:\n${updatedRequest.errors!.join('\n')}`;
+                }
+                errorMessage += '\n\n请手动编写请求体或检查类定义。';
+
                 this._panel.webview.postMessage({
                     type: 'parsingFailed',
-                    message: '无法解析参数类型定义,请手动编写请求体'
+                    message: errorMessage
                 });
             } else {
                 // Send updated body to webview
+                const bodyContent = updatedRequest.body ? JSON.stringify(updatedRequest.body, null, 2) : null;
                 this._panel.webview.postMessage({
                     type: 'updateBodyContent',
-                    body: updatedRequest.body ? JSON.stringify(updatedRequest.body, null, 2) : null
+                    body: bodyContent
                 });
 
                 // Send completion message to webview
+                const completionMessage = hasValidProperties
+                    ? '参数解析完成!'
+                    : '参数解析完成(部分属性可能需要手动填写)';
                 this._panel.webview.postMessage({
                     type: 'parsingComplete',
-                    message: '参数解析完成!'
+                    message: completionMessage
                 });
             }
         }
@@ -821,6 +850,13 @@ export class ApiTestPanel {
         const bodyJson = request.body ? JSON.stringify(request.body, null, 2) : '';
         const formDataJson = request.formData ? JSON.stringify(request.formData) : '';
         const hasFormData = !!request.formData;
+
+        // Add errors as HTML comments if they exist
+        let bodyJsonWithComments = bodyJson;
+        if (request.errors && request.errors.length > 0) {
+            const errorComments = request.errors.map(error => `<!-- ${error} -->`).join('\n');
+            bodyJsonWithComments = errorComments + '\n' + bodyJson;
+        }
 
         // Get base URL without query string
         const urlWithoutQuery = request.url.split('?')[0];
@@ -1735,7 +1771,7 @@ export class ApiTestPanel {
                         </div>
                     </div>
                     <div class="json-editor-container">
-                        <textarea id="request-body" class="json-editor" spellcheck="false">${bodyJson || ''}</textarea>
+                        <textarea id="request-body" class="json-editor" spellcheck="false">${bodyJsonWithComments || ''}</textarea>
                         <div id="json-error-message" class="json-error-message">
                             <span class="json-error-icon">⚠️</span>
                             <span id="json-error-text"></span>
@@ -1866,7 +1902,7 @@ export class ApiTestPanel {
         let headers = ${headersJson};
         let formData = ${formDataJson || '{}'};
         const baseUrl = '${urlWithoutQuery}';
-        let originalJsonBody = ${bodyJson ? `\`${bodyJson}\`` : 'null'}; // Store original JSON
+        let originalJsonBody = ${bodyJsonWithComments ? `\`${bodyJsonWithComments}\`` : 'null'}; // Store original JSON
         let currentEditingParam = null; // For value editor
 
         // Initialize on load
@@ -2640,7 +2676,11 @@ export class ApiTestPanel {
                 }
             } else if (message.type === 'parsingFailed') {
                 hideParsingStatus();
-                showNotification('⚠️ ' + (message.message || '参数解析失败'), 'error');
+
+                // 对于错误信息，使用详细显示函数
+                const errorMsg = message.message || '参数解析失败';
+                showDetailedNotification('⚠️ ' + errorMsg, 'error');
+                console.warn('[Webview] Parsing failed with details:', errorMsg);
 
                 // 恢复重新解析按钮
                 const reparseBtn = document.getElementById('reparse-btn');
@@ -2704,11 +2744,51 @@ export class ApiTestPanel {
                 z-index: 10000;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.3);
                 animation: slideIn 0.3s ease-out;
+                max-width: 400px;
+                word-wrap: break-word;
             \`;
             notification.textContent = message;
             document.body.appendChild(notification);
 
             const duration = type === 'info' ? 2000 : 3000;
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, duration);
+        }
+
+        /**
+         * 显示详细的错误信息（支持多行）
+         */
+        function showDetailedNotification(message, type) {
+            const notification = document.createElement('div');
+            let bgColor = '#F93E3E'; // error
+            if (type === 'success') bgColor = '#49CC90';
+            if (type === 'info') bgColor = '#61AFFE';
+
+            notification.style.cssText = \`
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 20px;
+                border-radius: 4px;
+                background: \${bgColor};
+                color: white;
+                font-size: 13px;
+                z-index: 10000;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+                animation: slideIn 0.3s ease-out;
+                max-width: 500px;
+                max-height: 300px;
+                overflow-y: auto;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                line-height: 1.5;
+            \`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            const duration = 5000; // 错误信息显示更长时间
             setTimeout(() => {
                 notification.style.animation = 'slideOut 0.3s ease-out';
                 setTimeout(() => notification.remove(), 300);

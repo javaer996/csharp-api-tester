@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { ApiEndpointInfo, ApiParameter } from './apiEndpointDetector';
 import { Environment } from './environmentManager';
 import { ClassProperty } from './csharpClassParser';
@@ -10,6 +11,7 @@ export interface GeneratedRequest {
     pathParams: Record<string, any>;
     body?: any;
     formData?: Record<string, any>;  // New: for form-data
+    errors?: string[];  // Errors that occurred during request generation
 }
 
 export class ApiRequestGenerator {
@@ -59,14 +61,16 @@ export class ApiRequestGenerator {
 
         // Generate body for POST/PUT methods
         if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
-            request.body = this.generateRequestBody(endpoint.parameters);
+            const result = this.generateRequestBody(endpoint.parameters);
+            request.body = result.body;
+            request.errors = result.errors;
         }
 
         request.queryParams = queryParams;
         return request;
     }
 
-    generateRequestForEnvironment(endpoint: ApiEndpointInfo, environment: Environment): GeneratedRequest {
+    generateRequestForEnvironment(endpoint: ApiEndpointInfo, environment: Environment, skipErrors: boolean = false): GeneratedRequest {
         const request: GeneratedRequest = {
             url: '',
             method: endpoint.method,
@@ -120,7 +124,9 @@ export class ApiRequestGenerator {
             request.headers['Content-Type'] = 'multipart/form-data';
         } else if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
             // Generate body for POST/PUT methods
-            request.body = this.generateRequestBody(endpoint.parameters);
+            const result = this.generateRequestBody(endpoint.parameters, skipErrors);
+            request.body = result.body;
+            request.errors = result.errors;
         }
 
         request.queryParams = queryParams;
@@ -171,20 +177,34 @@ export class ApiRequestGenerator {
         return fileTypes.some(ft => type.includes(ft));
     }
 
-    private generateRequestBody(parameters: ApiParameter[]): any {
+    private generateRequestBody(parameters: ApiParameter[], skipErrors: boolean = false): { body: any, errors: string[] } {
         const bodyParams = parameters.filter(p => p.source === 'body');
         const formParams = parameters.filter(p => p.source === 'form');
+        const errors: string[] = [];
 
         if (bodyParams.length === 1) {
             // Single body parameter - use class properties if available
             const bodyParam = bodyParams[0];
             if (bodyParam.properties && bodyParam.properties.length > 0) {
                 console.log(`[ApiRequestGenerator] Generating body from ${bodyParam.properties.length} class properties`);
-                return this.generateObjectFromProperties(bodyParam.properties);
+                const { body, errors: objErrors } = this.generateObjectFromPropertiesWithErrors(bodyParam.properties);
+                if (objErrors.length > 0) {
+                    errors.push(...objErrors);
+                }
+                return { body, errors };
             } else {
-                // 如果没有解析到 properties,返回 null,不生成默认结构
-                console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, returning null`);
-                return null;
+                // 如果没有解析到 properties
+                if (skipErrors) {
+                    // 初始渲染时，不记录错误，只返回 null
+                    console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, skipping error (initial render)`);
+                    return { body: null, errors: [] };
+                } else {
+                    // 解析完成后，记录错误信息
+                    console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, returning null with error info`);
+                    const errorMsg = `⚠️  Class '${bodyParam.type}' not found in workspace - 无法自动生成完整的请求体`;
+                    errors.push(errorMsg);
+                    return { body: null, errors };
+                }
             }
         } else if (bodyParams.length > 1) {
             // Multiple body parameters (wrap in object)
@@ -192,21 +212,22 @@ export class ApiRequestGenerator {
             for (const param of bodyParams) {
                 body[param.name] = this.generateSampleValue(param.type, param.name);
             }
-            return body;
+            return { body, errors: [] };
         } else if (formParams.length > 0) {
             // Form data
             const formData: Record<string, any> = {};
             for (const param of formParams) {
                 formData[param.name] = this.generateSampleValue(param.type, param.name);
             }
-            return formData;
+            return { body: formData, errors: [] };
         }
 
-        return null;
+        return { body: null, errors: [] };
     }
 
-    private generateObjectFromProperties(properties: ClassProperty[]): Record<string, any> {
+    private generateObjectFromPropertiesWithErrors(properties: ClassProperty[]): { body: Record<string, any>, errors: string[] } {
         const obj: Record<string, any> = {};
+        const errors: string[] = [];
 
         for (const prop of properties) {
             // Check if property type is a complex type that might have nested properties
@@ -222,10 +243,16 @@ export class ApiRequestGenerator {
                 // Check if the property itself has nested properties (recursively parsed)
                 if (prop.properties && prop.properties.length > 0) {
                     console.log(`[ApiRequestGenerator] Generating array from nested properties for ${prop.name}`);
-                    obj[prop.name] = [this.generateObjectFromProperties(prop.properties)];
+                    const { body: nestedBody, errors: nestedErrors } = this.generateObjectFromPropertiesWithErrors(prop.properties);
+                    obj[prop.name] = [nestedBody];
+                    if (nestedErrors.length > 0) {
+                        errors.push(...nestedErrors);
+                    }
                 } else if (!this.isSimpleType(innerType)) {
-                    // Inner type is complex but wasn't parsed - return error marker
+                    // Inner type is complex but wasn't parsed - record error instead of returning error marker
                     console.warn(`[ApiRequestGenerator] ⚠️ Collection inner type ${innerType} not parsed for ${prop.name}!`);
+                    const errorMsg = `⚠️ Unable to parse collection inner type '${innerType}' for property '${prop.name}'. Please define this class in your workspace or manually edit the request body.`;
+                    errors.push(errorMsg);
                     obj[prop.name] = [`⚠️ ERROR: Unable to parse type '${innerType}'. Please define this class in your workspace or manually edit the request body.`];
                 } else {
                     // Simple type array
@@ -235,10 +262,16 @@ export class ApiRequestGenerator {
                 // For complex types, check if we have recursively parsed properties
                 if (prop.properties && prop.properties.length > 0) {
                     console.log(`[ApiRequestGenerator] Generating object from ${prop.properties.length} nested properties for ${prop.name}`);
-                    obj[prop.name] = this.generateObjectFromProperties(prop.properties);
+                    const { body: nestedBody, errors: nestedErrors } = this.generateObjectFromPropertiesWithErrors(prop.properties);
+                    obj[prop.name] = nestedBody;
+                    if (nestedErrors.length > 0) {
+                        errors.push(...nestedErrors);
+                    }
                 } else {
-                    // Complex type not parsed - return error marker instead of fake data
+                    // Complex type not parsed - record error instead of fake data
                     console.warn(`[ApiRequestGenerator] ⚠️ Complex type ${prop.type} not parsed for ${prop.name}!`);
+                    const errorMsg = `⚠️ Unable to parse complex type '${prop.type}' for property '${prop.name}'. Please define this class in your workspace or manually edit the request body.`;
+                    errors.push(errorMsg);
                     obj[prop.name] = {
                         "⚠️ ERROR": `Unable to parse type '${prop.type}'`,
                         "解决方案": "Please define this class in your workspace or manually edit the request body",
@@ -253,7 +286,15 @@ export class ApiRequestGenerator {
             console.log(`[ApiRequestGenerator] Generated ${prop.name}: ${typeof obj[prop.name] === 'object' ? JSON.stringify(obj[prop.name]).substring(0, 100) : obj[prop.name]} (type: ${prop.type})`);
         }
 
-        return obj;
+        return { body: obj, errors };
+    }
+
+    /**
+     * Legacy method for backward compatibility - now just calls the new method
+     */
+    private generateObjectFromProperties(properties: ClassProperty[]): Record<string, any> {
+        const { body } = this.generateObjectFromPropertiesWithErrors(properties);
+        return body;
     }
 
     /**
