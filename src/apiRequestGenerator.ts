@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiEndpointInfo, ApiParameter } from './apiEndpointDetector';
 import { Environment } from './environmentManager';
-import { ClassProperty } from './csharpClassParser';
+import { ClassProperty, CSharpClassParser } from './csharpClassParser';
 
 export interface GeneratedRequest {
     url: string;
@@ -15,6 +15,8 @@ export interface GeneratedRequest {
 }
 
 export class ApiRequestGenerator {
+    private classParser?: CSharpClassParser; // Optional: for accessing cached errors
+
     private sampleData = {
         string: [
             'sample_string', 'test_value', 'example', 'data',
@@ -31,6 +33,10 @@ export class ApiRequestGenerator {
         email: ['test@example.com', 'user@domain.com', 'contact@company.org'],
         url: ['https://example.com', 'http://localhost:8080', 'https://api.example.com']
     };
+
+    constructor(classParser?: CSharpClassParser) {
+        this.classParser = classParser;
+    }
 
     generateRequest(endpoint: ApiEndpointInfo, baseUrl: string): GeneratedRequest {
         const request: GeneratedRequest = {
@@ -201,7 +207,24 @@ export class ApiRequestGenerator {
                 }
                 return { body, errors };
             } else {
-                // 如果没有解析到 properties
+                // ⭐ NEW: 如果没有解析到 properties,先尝试从缓存读取错误
+                if (this.classParser) {
+                    const cachedErrors = this.classParser.getCachedErrors(bodyParam.type);
+                    if (cachedErrors && cachedErrors.length > 0) {
+                        console.log(`[ApiRequestGenerator] Using cached errors for ${bodyParam.type}`);
+                        // 将缓存的错误转换为我们的错误格式
+                        const formattedErrors = cachedErrors.map(err => {
+                            if (err.includes('未在工作区找到')) {
+                                return `_GLOBAL_|${err}|解决方案: 请在工作区定义此类型,或手动填写完整的请求体`;
+                            }
+                            return `_GLOBAL_|${err}|请检查类型定义`;
+                        });
+                        errors.push(...formattedErrors);
+                        return { body: null, errors };
+                    }
+                }
+
+                // 如果没有缓存的错误
                 if (skipErrors) {
                     // 初始渲染时，不记录错误，只返回 null
                     console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, skipping error (initial render)`);

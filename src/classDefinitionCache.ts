@@ -9,6 +9,7 @@ interface CachedClassDefinition {
     classDefinition: string | null;
     filePath: string;
     timestamp: number;
+    errors?: string[]; // 缓存解析错误信息,避免重复解析失败的类
 }
 
 /**
@@ -61,14 +62,16 @@ export class ClassDefinitionCache {
      * @param properties Parsed properties
      * @param classDefinition Full class text definition
      * @param filePath Source file path
+     * @param errors Optional parsing error messages
      */
     set(
         className: string,
         properties: ClassProperty[],
         classDefinition: string | null,
-        filePath: string
+        filePath: string,
+        errors?: string[]
     ): void {
-        console.log(`[ClassDefinitionCache] Caching: ${className} from ${filePath}`);
+        console.log(`[ClassDefinitionCache] Caching: ${className} from ${filePath}${errors && errors.length > 0 ? ' (with errors)' : ''}`);
 
         // Enforce max size (LRU eviction)
         if (this.cache.size >= this.maxSize) {
@@ -81,7 +84,8 @@ export class ClassDefinitionCache {
             properties,
             classDefinition,
             filePath,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            errors
         });
 
         console.log(`[ClassDefinitionCache] Cache size: ${this.cache.size}/${this.maxSize}`);

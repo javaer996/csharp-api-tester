@@ -615,6 +615,18 @@ export class CSharpClassParser {
         }
 
         console.log(`[CSharpClassParser] ❌ Class ${actualClassName} not found via using-based search`);
+
+        // ⭐ NEW: Cache the failure with error message to avoid repeated searching
+        const errorMsg = `⚠️ 警告: 类 '${actualClassName}' 未在工作区找到`;
+        console.log(`[CSharpClassParser] 💾 Caching parse failure for ${actualClassName} with error message`);
+        this.cache.set(
+            actualClassName,
+            [], // Empty properties
+            null, // No class definition
+            currentDocument.uri.fsPath,
+            [errorMsg] // Error message
+        );
+
         return null;
     }
 
@@ -1093,5 +1105,20 @@ export class CSharpClassParser {
      */
     getCache(): ClassDefinitionCache {
         return this.cache;
+    }
+
+    /**
+     * Get cached parsing errors for a class
+     * @param className The class name to check
+     * @returns Array of error messages if cached, null otherwise
+     */
+    getCachedErrors(className: string): string[] | null {
+        const actualClassName = this.extractInnerType(className);
+        const cached = this.cache.get(actualClassName);
+        if (cached && cached.errors && cached.errors.length > 0) {
+            console.log(`[CSharpClassParser] 📋 Retrieved ${cached.errors.length} cached error(s) for ${actualClassName}`);
+            return cached.errors;
+        }
+        return null;
     }
 }

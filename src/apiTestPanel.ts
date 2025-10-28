@@ -42,6 +42,28 @@ export class ApiTestPanel {
             const existingPanel = ApiTestPanel.panels.get(panelKey)!;
             existingPanel._panel.reveal(column);
             if (endpoint) {
+                // ⭐ CRITICAL: 保留旧 endpoint 的 properties 和 classDefinition，避免重复解析
+                // 当第二次打开同一接口时，新的 endpoint 对象的 param.properties 是 undefined
+                // 如果直接替换，会导致重新触发解析，显示 loading
+                console.log('[ApiTestPanel] 🔄 Updating endpoint, preserving parsed properties...');
+                if (existingPanel._currentEndpoint) {
+                    // 遍历新 endpoint 的参数，从旧 endpoint 中复制已解析的状态
+                    for (const newParam of endpoint.parameters) {
+                        const oldParam = existingPanel._currentEndpoint.parameters.find(
+                            p => p.name === newParam.name && p.source === newParam.source && p.type === newParam.type
+                        );
+                        if (oldParam) {
+                            // 保留已解析的 properties 和 classDefinition
+                            if (oldParam.properties !== undefined) {
+                                newParam.properties = oldParam.properties;
+                                console.log(`[ApiTestPanel]   ✅ Preserved properties for ${newParam.name} (${oldParam.properties.length} properties)`);
+                            }
+                            if (oldParam.classDefinition !== undefined) {
+                                newParam.classDefinition = oldParam.classDefinition;
+                            }
+                        }
+                    }
+                }
                 existingPanel._currentEndpoint = endpoint;
                 existingPanel.updateContent();
             }
@@ -80,16 +102,17 @@ export class ApiTestPanel {
         this._extensionUri = _extensionUri;
         this._currentEndpoint = endpoint;
         this._panelKey = panelKey;
-        this._requestGenerator = new ApiRequestGenerator();
-        this._environmentManager = EnvironmentManager.getInstance();
-        this._aiService = AIService.getInstance();
         // ⭐ CRITICAL: Always use the provided detector to maintain cache consistency
         if (!detector) {
             console.error('[ApiTestPanel] ❌ ERROR: No detector provided to ApiTestPanel constructor! This will cause cache loss.');
-            throw new Error('ApiEndpointDetector is required to maintain cache consistency');
+            throw new Error('ApiTestPanel requires a detector instance');
         }
         this._detector = detector;
         console.log('[ApiTestPanel] ✅ Using shared ApiEndpointDetector instance for consistent caching');
+        // ⭐ NEW: Pass classParser to ApiRequestGenerator so it can access cached errors
+        this._requestGenerator = new ApiRequestGenerator(detector.getClassParser());
+        this._environmentManager = EnvironmentManager.getInstance();
+        this._aiService = AIService.getInstance();
 
         // Set the webview's initial html content
         this.updateContent();
@@ -197,9 +220,27 @@ export class ApiTestPanel {
         const fullBaseUrl = currentEnvironment.baseUrl;
         const fullHeaders = currentEnvironment.headers;
 
-        // Generate initial request (may not have full class properties yet)
-        // 初始渲染时不包含错误信息，避免在类还没解析完成时就显示错误
-        const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, true);
+        // ⭐ NEW: 检查是否有缓存的错误信息,如果有则直接使用(不跳过错误)
+        let hasCachedErrors = false;
+        if (this._detector) {
+            const classParser = this._detector.getClassParser();
+            for (const param of this._currentEndpoint.parameters) {
+                if ((param.source === 'body' || param.source === 'form')) {
+                    const cachedErrors = classParser.getCachedErrors(param.type);
+                    if (cachedErrors && cachedErrors.length > 0) {
+                        hasCachedErrors = true;
+                        console.log(`[ApiTestPanel] Found cached errors for ${param.type}, will include in initial render`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Generate initial request
+        // 如果有缓存的错误,则初始渲染时也包含错误信息(skipErrors = false)
+        const skipErrors = !hasCachedErrors;
+        console.log(`[ApiTestPanel] Initial render with skipErrors = ${skipErrors}`);
+        const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, skipErrors);
 
         // Render complete UI immediately (no full-screen loading)
         this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, generatedRequest, fullHeaders, currentEnvironment);
@@ -222,10 +263,32 @@ export class ApiTestPanel {
 
         // Check if there are body/form parameters that need parsing
         if (!force) {
-            const needsParsing = this._currentEndpoint.parameters.some(p =>
-                (p.source === 'body' || p.source === 'form') &&
-                (!p.properties || p.properties.length === 0)
-            );
+            const needsParsing = this._currentEndpoint.parameters.some(p => {
+                if (p.source !== 'body' && p.source !== 'form') {
+                    return false;
+                }
+
+                // ⭐ CRITICAL: 区分"未解析"和"解析失败"
+                // - undefined: 未解析，需要解析
+                // - []: 解析失败（已缓存错误），不需要重新解析
+                // - [ClassProperty, ...]: 解析成功，不需要重新解析
+                if (p.properties === undefined) {
+                    console.log(`[ApiTestPanel] 🔍 ${p.type} needs parsing (undefined)`);
+                    return true;
+                }
+
+                if (Array.isArray(p.properties) && p.properties.length === 0) {
+                    console.log(`[ApiTestPanel] ⏭️ ${p.type} already parsed (failed, cached as [])`);
+                    return false;
+                }
+
+                if (Array.isArray(p.properties) && p.properties.length > 0) {
+                    console.log(`[ApiTestPanel] ✅ ${p.type} already parsed (${p.properties.length} properties)`);
+                    return false;
+                }
+
+                return false;
+            });
 
             if (!needsParsing) {
                 console.log('[ApiTestPanel] ⚡ No parsing needed, all parameters already parsed');
@@ -312,7 +375,10 @@ export class ApiTestPanel {
                         param.properties = properties;
                         console.log(`[ApiTestPanel] ✅ Parsed ${properties.length} properties for ${param.type} (including nested)`);
                     } else {
-                        console.log(`[ApiTestPanel] ⚠️ No properties found for ${param.type}`);
+                        // ⭐ CRITICAL: 解析失败时，设置为空数组，标记为"已解析但失败"
+                        // 这样下次打开时就不会重新解析，而是直接使用缓存的错误信息
+                        param.properties = [];
+                        console.log(`[ApiTestPanel] ⚠️ No properties found for ${param.type}, marked as parsed (failed)`);
                     }
 
                     // Get full class definition for AI context
@@ -322,6 +388,8 @@ export class ApiTestPanel {
                     }
                 } catch (error) {
                     console.error(`[ApiTestPanel] ❌ Failed to parse ${param.type}:`, error);
+                    // ⭐ CRITICAL: 异常时也标记为"已解析但失败"
+                    param.properties = [];
                     // 向 UI 发送错误消息
                     this._panel.webview.postMessage({
                         type: 'parsingStatus',
@@ -598,8 +666,10 @@ export class ApiTestPanel {
         }
     }
 
-    private regenerateRequest() {
-        this.updateContent();
+    private async regenerateRequest() {
+        // ⭐ NEW: 重新生成时应该清除缓存并重新解析
+        console.log('[ApiTestPanel] 🔄 Regenerating request with cache clear...');
+        await this.reparseBodyParameters();
     }
 
     private async switchEnvironment(): Promise<void> {
@@ -820,12 +890,32 @@ export class ApiTestPanel {
 
         console.log('[ApiTestPanel] 🔄 Starting reparsing...');
 
-        // 清空 body/form 参数的 properties 缓存
-        for (const param of this._currentEndpoint.parameters) {
-            if (param.source === 'body' || param.source === 'form') {
-                console.log(`[ApiTestPanel] Clearing properties cache for ${param.type}`);
-                param.properties = undefined;
-                param.classDefinition = undefined;
+        // ⭐ CRITICAL: 清除 ClassDefinitionCache 中的缓存,确保真正重新解析
+        if (this._detector) {
+            const classParser = this._detector.getClassParser();
+            const cache = classParser.getCache();
+
+            // 清除 body/form 参数相关的类缓存
+            for (const param of this._currentEndpoint.parameters) {
+                if (param.source === 'body' || param.source === 'form') {
+                    console.log(`[ApiTestPanel] Clearing cache for class: ${param.type}`);
+                    cache.invalidateClass(param.type);
+
+                    // 清空参数级别的缓存
+                    console.log(`[ApiTestPanel] Clearing properties cache for ${param.type}`);
+                    param.properties = undefined;
+                    param.classDefinition = undefined;
+                }
+            }
+        } else {
+            // Fallback: 只清空参数级别的缓存
+            console.warn('[ApiTestPanel] ⚠️ No detector available, only clearing param-level cache');
+            for (const param of this._currentEndpoint.parameters) {
+                if (param.source === 'body' || param.source === 'form') {
+                    console.log(`[ApiTestPanel] Clearing properties cache for ${param.type}`);
+                    param.properties = undefined;
+                    param.classDefinition = undefined;
+                }
             }
         }
 
