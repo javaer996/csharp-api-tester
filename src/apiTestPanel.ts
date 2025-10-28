@@ -2414,7 +2414,7 @@ export class ApiTestPanel {
             if (textarea && body) {
                 textarea.value = body;
                 validateJSON(); // 验证新的内容
-                showNotification('✅ Body 内容已更新', 'success');
+                // Body内容更新后不再显示弹窗提示
             }
         }
 
@@ -2724,7 +2724,7 @@ export class ApiTestPanel {
                 updateParsingStatus(message.message);
             } else if (message.type === 'parsingComplete') {
                 hideParsingStatus();
-                showNotification('✅ ' + (message.message || '参数解析完成!'), 'success');
+                // 参数解析成功后不再显示弹窗提示
 
                 // 恢复重新解析按钮
                 const reparseBtn = document.getElementById('reparse-btn');
