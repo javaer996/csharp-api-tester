@@ -6,6 +6,7 @@ export interface ClassProperty {
     type: string;
     required: boolean;
     properties?: ClassProperty[];  // For nested complex types
+    _baseClassWarning?: string;  // Warning message when base class parsing fails
 }
 
 export class CSharpClassParser {
@@ -80,6 +81,7 @@ export class CSharpClassParser {
         const baseClassName = this.extractBaseClassName(classDefinitionLine);
 
         let allProperties: ClassProperty[] = [];
+        let baseClassWarning: string | undefined = undefined;
 
         // If there's a base class, recursively parse it first
         if (baseClassName && !this.isSimpleType(baseClassName)) {
@@ -88,6 +90,10 @@ export class CSharpClassParser {
             if (baseClassProperties && baseClassProperties.length > 0) {
                 console.log(`[CSharpClassParser]   ✅ Extracted ${baseClassProperties.length} properties from base class`);
                 allProperties = [...baseClassProperties];
+            } else {
+                // Base class parsing failed - record warning
+                console.warn(`[CSharpClassParser] ⚠️ WARNING: Base class '${baseClassName}' not found for '${actualClassName}' - inherited properties will be missing!`);
+                baseClassWarning = `父类 '${baseClassName}' 未在工作区找到`;
             }
         }
 
@@ -114,6 +120,11 @@ export class CSharpClassParser {
         // Convert back to array
         allProperties = Array.from(propertyMap.values());
         console.log(`[CSharpClassParser] Total properties (including inherited, with overrides): ${allProperties.length}`);
+
+        // Attach base class warning to the first property if warning exists
+        if (baseClassWarning && allProperties.length > 0) {
+            allProperties[0]._baseClassWarning = baseClassWarning;
+        }
 
         // Cache the result
         if (allProperties.length > 0) {

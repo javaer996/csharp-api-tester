@@ -187,6 +187,14 @@ export class ApiRequestGenerator {
             const bodyParam = bodyParams[0];
             if (bodyParam.properties && bodyParam.properties.length > 0) {
                 console.log(`[ApiRequestGenerator] Generating body from ${bodyParam.properties.length} class properties`);
+
+                // Check for base class warning
+                if (bodyParam.properties[0]._baseClassWarning) {
+                    const baseClassWarning = bodyParam.properties[0]._baseClassWarning;
+                    const errorMsg = `_GLOBAL_|⚠️ 警告: 类 '${bodyParam.type}' 的${baseClassWarning}|解决方案: 请检查父类定义文件是否在工作区中,或手动补充继承的属性。当前请求体仅包含子类自身的属性,可能不完整`;
+                    errors.push(errorMsg);
+                }
+
                 const { body, errors: objErrors } = this.generateObjectFromPropertiesWithErrors(bodyParam.properties);
                 if (objErrors.length > 0) {
                     errors.push(...objErrors);
@@ -201,7 +209,7 @@ export class ApiRequestGenerator {
                 } else {
                     // 解析完成后，记录错误信息
                     console.log(`[ApiRequestGenerator] No properties found for ${bodyParam.type}, returning null with error info`);
-                    const errorMsg = `⚠️  Class '${bodyParam.type}' not found in workspace - 无法自动生成完整的请求体`;
+                    const errorMsg = `_GLOBAL_|⚠️ 警告: 类 '${bodyParam.type}' 未在工作区找到|解决方案: 请在工作区定义此类型,或手动填写完整的请求体`;
                     errors.push(errorMsg);
                     return { body: null, errors };
                 }
@@ -251,9 +259,9 @@ export class ApiRequestGenerator {
                 } else if (!this.isSimpleType(innerType)) {
                     // Inner type is complex but wasn't parsed - record error instead of returning error marker
                     console.warn(`[ApiRequestGenerator] ⚠️ Collection inner type ${innerType} not parsed for ${prop.name}!`);
-                    const errorMsg = `⚠️ Unable to parse collection inner type '${innerType}' for property '${prop.name}'. Please define this class in your workspace or manually edit the request body.`;
+                    const errorMsg = `${prop.name}|⚠️ 警告: 无法解析集合内部类型 '${innerType}'|解决方案: 请在工作区定义此类型,或手动添加 ${innerType} 对象到此数组`;
                     errors.push(errorMsg);
-                    obj[prop.name] = [`⚠️ ERROR: Unable to parse type '${innerType}'. Please define this class in your workspace or manually edit the request body.`];
+                    obj[prop.name] = [];  // Empty array for user to fill
                 } else {
                     // Simple type array
                     obj[prop.name] = [this.generateSampleValue(innerType, prop.name)];
@@ -270,13 +278,9 @@ export class ApiRequestGenerator {
                 } else {
                     // Complex type not parsed - record error instead of fake data
                     console.warn(`[ApiRequestGenerator] ⚠️ Complex type ${prop.type} not parsed for ${prop.name}!`);
-                    const errorMsg = `⚠️ Unable to parse complex type '${prop.type}' for property '${prop.name}'. Please define this class in your workspace or manually edit the request body.`;
+                    const errorMsg = `${prop.name}|⚠️ 警告: 无法解析复杂类型 '${prop.type}'|解决方案: 请在工作区定义此类型,或手动填写 ${prop.type} 对象`;
                     errors.push(errorMsg);
-                    obj[prop.name] = {
-                        "⚠️ ERROR": `Unable to parse type '${prop.type}'`,
-                        "解决方案": "Please define this class in your workspace or manually edit the request body",
-                        "类型": prop.type
-                    };
+                    obj[prop.name] = null;  // Null for user to fill
                 }
             } else {
                 // Generate value based on property name and type

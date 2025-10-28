@@ -335,45 +335,117 @@ export class ApiTestPanel {
             // 解析完成后，重新生成请求，这次包含错误信息（如果解析失败）
             const updatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, false);
 
-            // 检查是否有错误（通过 errors 数组判断）
+            // 生成body内容(可能为null)
+            const bodyJson = updatedRequest.body ? JSON.stringify(updatedRequest.body, null, 2) : '';
+
+            // 检查是否有错误
             const hasErrors = updatedRequest.errors && updatedRequest.errors.length > 0;
 
-            // 只有在没有有效属性且没有body，或者存在错误时，才发送 parsingFailed
-            if ((!hasValidProperties && !updatedRequest.body) || hasErrors) {
-                console.log('[ApiTestPanel] ⚠️ Parsing failed or errors detected');
+            // 注入错误注释到JSON中
+            const bodyWithComments = this.injectErrorCommentsIntoJson(bodyJson, updatedRequest.errors || []);
 
-                // 构建详细的错误消息
-                let errorMessage = '无法解析参数类型定义';
-                if (failedClasses.length > 0) {
-                    errorMessage += `\n失败的类: ${failedClasses.join(', ')}`;
+            // 总是发送body更新消息,无论是否有错误
+            this._panel.webview.postMessage({
+                type: 'updateBodyContent',
+                body: bodyWithComments || '// 请手动填写请求体'
+            });
+
+            // 在控制台输出错误信息(如果有)
+            if (hasErrors) {
+                console.warn('[ApiTestPanel] ⚠️ Parsing completed with errors:');
+                updatedRequest.errors!.forEach(err => console.warn(`  - ${err}`));
+            }
+
+            // Send completion message to webview
+            const completionMessage = hasValidProperties
+                ? '参数解析完成!'
+                : '参数解析完成(部分属性可能需要手动填写)';
+            this._panel.webview.postMessage({
+                type: 'parsingComplete',
+                message: completionMessage
+            });
+        }
+    }
+
+    /**
+     * Inject error comments into JSON body string
+     * @param bodyJson Original JSON string
+     * @param errors Array of error messages in format "fieldName|warning|solution"
+     * @returns JSON string with error comments injected
+     */
+    private injectErrorCommentsIntoJson(bodyJson: string, errors: string[]): string {
+        let bodyJsonWithComments = bodyJson;
+
+        if (!errors || errors.length === 0) {
+            return bodyJsonWithComments;
+        }
+
+        // Parse errors and inject as JSON comments
+        const commentLines: string[] = [];
+        const fieldComments: Map<string, string[]> = new Map();
+
+        for (const error of errors) {
+            // Error format: "fieldName|warning|solution" or "_GLOBAL_|warning|solution"
+            const parts = error.split('|');
+            if (parts.length === 3) {
+                const [field, warning, solution] = parts;
+                if (field === '_GLOBAL_') {
+                    commentLines.push(`// ${warning}`);
+                    commentLines.push(`// ${solution}`);
+                } else {
+                    if (!fieldComments.has(field)) {
+                        fieldComments.set(field, []);
+                    }
+                    fieldComments.get(field)!.push(`// ${warning}`, `// ${solution}`);
                 }
-                if (hasErrors) {
-                    errorMessage += `\n错误详情:\n${updatedRequest.errors!.join('\n')}`;
-                }
-                errorMessage += '\n\n请手动编写请求体或检查类定义。';
-
-                this._panel.webview.postMessage({
-                    type: 'parsingFailed',
-                    message: errorMessage
-                });
-            } else {
-                // Send updated body to webview
-                const bodyContent = updatedRequest.body ? JSON.stringify(updatedRequest.body, null, 2) : null;
-                this._panel.webview.postMessage({
-                    type: 'updateBodyContent',
-                    body: bodyContent
-                });
-
-                // Send completion message to webview
-                const completionMessage = hasValidProperties
-                    ? '参数解析完成!'
-                    : '参数解析完成(部分属性可能需要手动填写)';
-                this._panel.webview.postMessage({
-                    type: 'parsingComplete',
-                    message: completionMessage
-                });
             }
         }
+
+        // If there are global errors or no body, show at top
+        if (commentLines.length > 0) {
+            bodyJsonWithComments = commentLines.join('\n') + '\n' + (bodyJson || '// 请手动填写请求体');
+        } else if (bodyJson && fieldComments.size > 0) {
+            // Inject field-specific comments into JSON
+            try {
+                const bodyObj = JSON.parse(bodyJson);
+                const lines: string[] = ['{'];
+                const keys = Object.keys(bodyObj);
+
+                for (let i = 0; i < keys.length; i++) {
+                    const key = keys[i];
+                    const value = bodyObj[key];
+                    const isLast = i === keys.length - 1;
+
+                    // Add comments for this field if they exist
+                    if (fieldComments.has(key)) {
+                        const comments = fieldComments.get(key)!;
+                        lines.push('  ' + comments.join('\n  '));
+                    }
+
+                    // Add the actual field
+                    const jsonValue = JSON.stringify(value, null, 2);
+                    const indentedValue = jsonValue.split('\n').join('\n  ');
+                    const comma = isLast ? '' : ',';
+
+                    if (value === null) {
+                        lines.push(`  "${key}": ${indentedValue}${comma}  // ← 请替换为实际值`);
+                    } else if (Array.isArray(value) && value.length === 0) {
+                        lines.push(`  "${key}": ${indentedValue}${comma}  // ← 请添加数组元素`);
+                    } else {
+                        lines.push(`  "${key}": ${indentedValue}${comma}`);
+                    }
+                }
+
+                lines.push('}');
+                bodyJsonWithComments = lines.join('\n');
+            } catch (e) {
+                // If JSON parsing fails, fall back to simple comment prepending
+                const allComments = Array.from(fieldComments.values()).flat();
+                bodyJsonWithComments = allComments.join('\n') + '\n' + bodyJson;
+            }
+        }
+
+        return bodyJsonWithComments;
     }
 
     private async testApi(requestData: any) {
@@ -851,12 +923,8 @@ export class ApiTestPanel {
         const formDataJson = request.formData ? JSON.stringify(request.formData) : '';
         const hasFormData = !!request.formData;
 
-        // Add errors as HTML comments if they exist
-        let bodyJsonWithComments = bodyJson;
-        if (request.errors && request.errors.length > 0) {
-            const errorComments = request.errors.map(error => `<!-- ${error} -->`).join('\n');
-            bodyJsonWithComments = errorComments + '\n' + bodyJson;
-        }
+        // Add errors as JSON comments if they exist
+        const bodyJsonWithComments = this.injectErrorCommentsIntoJson(bodyJson, request.errors || []);
 
         // Get base URL without query string
         const urlWithoutQuery = request.url.split('?')[0];
@@ -2677,9 +2745,8 @@ export class ApiTestPanel {
             } else if (message.type === 'parsingFailed') {
                 hideParsingStatus();
 
-                // 对于错误信息，使用详细显示函数
+                // 仅在控制台输出错误信息,不显示弹窗
                 const errorMsg = message.message || '参数解析失败';
-                showDetailedNotification('⚠️ ' + errorMsg, 'error');
                 console.warn('[Webview] Parsing failed with details:', errorMsg);
 
                 // 恢复重新解析按钮
