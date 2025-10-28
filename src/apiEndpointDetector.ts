@@ -271,20 +271,38 @@ export class ApiEndpointDetector {
     }
 
     private splitParameters(paramString: string): string[] {
-        // Handle complex parameter types with nested generics
+        // Enhanced parameter splitting that handles nested generics, brackets, and parentheses
         const parameters: string[] = [];
         let current = '';
-        let depth = 0;
+        let angleDepth = 0;    // For <>
+        let squareDepth = 0;   // For []
+        let parenDepth = 0;    // For ()
 
         for (let i = 0; i < paramString.length; i++) {
             const char = paramString[i];
+            const nextChar = i + 1 < paramString.length ? paramString[i + 1] : '';
 
+            // Track nested structures
             if (char === '<') {
-                depth++;
+                angleDepth++;
             } else if (char === '>') {
-                depth--;
-            } else if (char === ',' && depth === 0) {
-                parameters.push(current.trim());
+                angleDepth--;
+            } else if (char === '[') {
+                squareDepth++;
+            } else if (char === ']') {
+                squareDepth--;
+            } else if (char === '(') {
+                parenDepth++;
+            } else if (char === ')') {
+                parenDepth--;
+            }
+
+            // Split only at top level (no nested structures)
+            if (char === ',' && angleDepth === 0 && squareDepth === 0 && parenDepth === 0) {
+                const trimmed = current.trim();
+                if (trimmed) {
+                    parameters.push(trimmed);
+                }
                 current = '';
                 continue;
             }
@@ -292,8 +310,10 @@ export class ApiEndpointDetector {
             current += char;
         }
 
-        if (current.trim()) {
-            parameters.push(current.trim());
+        // Add the last parameter if exists
+        const lastParam = current.trim();
+        if (lastParam) {
+            parameters.push(lastParam);
         }
 
         return parameters;
@@ -308,56 +328,76 @@ export class ApiEndpointDetector {
         let source: 'path' | 'query' | 'body' | 'header' | 'form' = 'query';
         let required = false;
 
-        // Step 1: Detect parameter source from attributes
-        if (param.includes('[FromRoute]')) {
+        // Step 1: Detect parameter source from explicit From* attributes with enhanced pattern matching
+        // Support various formats: [FromBody], [FromBody()], [FromBody(...)], etc.
+        if (/\[FromRoute[\(\)\s\w="]*\]/i.test(param)) {
             source = 'path';
             required = true;
-        } else if (param.includes('[FromBody]')) {
+            console.log(`[C# API Detector]   ✓ Detected FromRoute attribute`);
+        } else if (/\[FromBody[\(\)\s\w="]*\]/i.test(param)) {
             source = 'body';
             required = true;
-        } else if (param.includes('[FromQuery]')) {
+            console.log(`[C# API Detector]   ✓ Detected FromBody attribute`);
+        } else if (/\[FromQuery[\(\)\s\w="]*\]/i.test(param)) {
             source = 'query';
-        } else if (param.includes('[FromHeader]')) {
+            console.log(`[C# API Detector]   ✓ Detected FromQuery attribute`);
+        } else if (/\[FromHeader[\(\)\s\w="]*\]/i.test(param)) {
             source = 'header';
-        } else if (param.includes('[FromForm]')) {
+            console.log(`[C# API Detector]   ✓ Detected FromHeader attribute`);
+        } else if (/\[FromForm[\(\)\s\w="]*\]/i.test(param)) {
             source = 'form';
+            console.log(`[C# API Detector]   ✓ Detected FromForm attribute`);
+        } else if (/\[FromServices?[\(\)\s\w="]*\]/i.test(param)) {
+            // FromServices typically shouldn't be part of API calls
+            console.warn(`[C# API Detector]   ⚠️ FromServices detected - typically not part of API calls`);
+            return null;
         }
 
         // Step 2: Extract parameter name from Name attribute if present
-        // e.g., [FromQuery(Name = "id")] long id -> name should be "id"
-        const attributeNameMatch = param.match(/Name\s*=\s*"(\w+)"/);
-        if (attributeNameMatch) {
-            name = attributeNameMatch[1];
+        // Support patterns: [FromQuery(Name = "id")], [FromQuery("id")], [FromQuery], [BindNever]
+        const nameAttributeMatch = param.match(/Name\s*=\s*"([^"]+)"/i) || param.match(/Name\s*=\s*'([^']+)'/i);
+        if (nameAttributeMatch) {
+            name = nameAttributeMatch[1];
             console.log(`[C# API Detector]   ✓ Found Name attribute: "${name}"`);
         }
 
-        // Step 3: Remove all attributes to simplify parsing
-        // Remove patterns like [FromQuery(...)], [FromBody], [Authorize(...)]
-        let cleanParam = param.replace(/\[[^\]]+\]/g, '').trim();
-        console.log(`[C# API Detector]   📝 Clean param: "${cleanParam}"`);
+        // Step 3: Remove all C# attributes to simplify parsing
+        // Remove patterns like [FromQuery(...)], [FromBody], [Required], [BindNever], etc.
+        let cleanParam = param.replace(/\[[^\[\]]+\]/g, '').trim();
+        console.log(`[C# API Detector]   📝 Cleaned parameter: "${cleanParam}"`);
 
-        // Step 4: Extract type and variable name
-        // Supports: "Type name", "Type? name", "List<Type> name", "List<Type>? name", "Type[] name"
-        // Match pattern: (Type) (variableName) [= defaultValue]
-        const typeAndNameMatch = cleanParam.match(/^([\w<>?,\[\]\s]+?)\s+(\w+)(?:\s*=|\s*$)/);
+        // Step 4: Enhanced type and variable name extraction
+        // Supports: "Type name", "Type? name", "List<Type> name", "Type[] name"
+        // Also supports: "ref Type name", "out Type name", "params Type[] name"
+        // Remove modifiers first
+        cleanParam = cleanParam.replace(/\b(ref|out|in)\b\s+/i, '').trim();
+        const isParams = /\bparams\b/i.test(param);
+
+        if (isParams) {
+            console.log(`[C# API Detector]   ✓ Detected params parameter`);
+        }
+
+        // Match type and variable name with improved regex
+        // Handles: TypeName, Type.Name, List<Type>, Type[], Dictionary<K,V>
+        const typeAndNameMatch = cleanParam.match(/^([\w<>?,\.\[\]\s]+?)\s+(\w+)(?:\s*=|\s*$)/);
 
         if (typeAndNameMatch) {
             type = typeAndNameMatch[1].trim();
             const variableName = typeAndNameMatch[2].trim();
 
-            // If name wasn't extracted from attribute, use variable name
+            // If name wasn't extracted from Name attribute, use variable name
             if (!name) {
                 name = variableName;
             }
 
-            console.log(`[C# API Detector]   ✓ Type: "${type}", Variable: "${variableName}"`);
+            console.log(`[C# API Detector]   ✓ Extracted Type: "${type}", Variable: "${variableName}"`);
         } else {
-            // Fallback: try simple space split
+            // Fallback: try space-based splitting (less reliable but better than nothing)
+            console.warn(`[C# API Detector]   ⚠️ Primary regex failed, attempting fallback parsing`);
             const parts = cleanParam.trim().split(/\s+/);
             if (parts.length >= 2) {
                 // Last part is name, everything else is type
                 const lastPart = parts[parts.length - 1];
-                // Remove default value if present (e.g., "id = 0" -> "id")
                 const nameFromParts = lastPart.split('=')[0].trim();
 
                 if (!name) {
@@ -365,9 +405,9 @@ export class ApiEndpointDetector {
                 }
 
                 type = parts.slice(0, parts.length - 1).join(' ').trim();
-                console.log(`[C# API Detector]   ⚠️ Fallback parse - Type: "${type}", Name: "${name}"`);
+                console.log(`[C# API Detector]   ⚠️ Fallback - Type: "${type}", Name: "${name}"`);
             } else {
-                console.log(`[C# API Detector]   ❌ Failed to parse parameter: "${param}"`);
+                console.error(`[C# API Detector]   ❌ Failed to parse parameter: "${param}"`);
                 return null;
             }
         }
@@ -375,20 +415,18 @@ export class ApiEndpointDetector {
         // Step 5: Check if type is nullable (for determining required field)
         const isNullable = type.includes('?');
 
-        // Step 6: If source wasn't determined from attribute, infer from type
-        if (!param.includes('[From')) {
-            const baseType = type.replace(/\?/g, '').replace(/\[\]/g, '').replace(/<.*>/g, '').trim();
-
-            if (this.isSimpleType(baseType)) {
-                source = 'query';
-                required = !isNullable;
-            } else {
-                source = 'body';
-                required = true;
-            }
-            console.log(`[C# API Detector]   🔄 Inferred source: ${source} (baseType: ${baseType})`);
+        // Step 6: Smart source inference if not explicitly specified
+        if (!/\[From\w+/i.test(param)) {
+            const inferredSource = this.inferParameterSource(type, name, param);
+            source = inferredSource.source;
+            required = inferredSource.required;
+            console.log(`[C# API Detector]   🔄 Inferred source: ${source} (reason: ${inferredSource.reason})`);
         } else if (source === 'query') {
+            // For query parameters, check if nullable determines required
             required = !isNullable;
+        } else if (source === 'body' || source === 'path') {
+            // Body and path parameters are typically required
+            required = true;
         }
 
         const apiParam: ApiParameter = {
@@ -398,7 +436,7 @@ export class ApiEndpointDetector {
             required: required
         };
 
-        console.log(`[C# API Detector]   ✅ Result: name="${name}", type="${type}", source="${source}", required=${required}`);
+        console.log(`[C# API Detector]   ✅ Final Result: name="${name}", type="${type}", source="${source}", required=${required}`);
 
         // ⚡ OPTIMIZATION: Do NOT parse class definitions here!
         // Parsing will be done lazily in ApiTestPanel when user clicks "Test API"
@@ -407,16 +445,138 @@ export class ApiEndpointDetector {
         return apiParam;
     }
 
-    private isSimpleType(type: string): boolean {
-        const simpleTypes = [
-            'string', 'int', 'long', 'short', 'byte',
-            'uint', 'ulong', 'ushort', 'sbyte',
-            'double', 'float', 'decimal',
-            'bool', 'DateTime', 'DateTimeOffset',
-            'Guid', 'char'
+    /**
+     * Intelligently infer parameter source based on type and parameter name
+     * when explicit [From*] attributes are not present
+     */
+    private inferParameterSource(type: string, paramName: string, fullParamText: string): { source: 'path' | 'query' | 'body' | 'header' | 'form', required: boolean, reason: string } {
+        const cleanType = type.replace(/\?/g, '').replace(/\[\]/g, '').trim();
+        const lowerName = paramName.toLowerCase();
+        const lowerType = cleanType.toLowerCase();
+
+        // Check for file upload types
+        if (this.isFileType(cleanType)) {
+            return {
+                source: 'form',
+                required: true,
+                reason: 'File type detected (IFormFile)'
+            };
+        }
+
+        // Path parameter detection based on parameter name
+        if (lowerName === 'id' ||
+            lowerName.endsWith('id') ||
+            lowerName.includes('identifier') ||
+            lowerName.includes('key') ||
+            lowerName.includes('code') ||
+            lowerName === 'slug') {
+            return {
+                source: 'path',
+                required: true,
+                reason: `Parameter name suggests path parameter (${paramName})`
+            };
+        }
+
+        // Form parameter detection
+        if (lowerType.includes('iformdata') || lowerType.includes('form')) {
+            return {
+                source: 'form',
+                required: true,
+                reason: 'Form data type detected'
+            };
+        }
+
+        // Header parameter detection
+        if (lowerName.includes('header') ||
+            lowerName.includes('authorization') ||
+            lowerName.includes('token')) {
+            return {
+                source: 'header',
+                required: false,
+                reason: 'Parameter name suggests header parameter'
+            };
+        }
+
+        // Query parameter detection for simple types
+        const isSimple = this.isSimpleType(cleanType);
+        const isNullable = type.includes('?');
+        const hasDefaultValue = /=\s*[^=]+/.test(fullParamText);
+
+        if (isSimple) {
+            // Simple types without ID-like names are typically query parameters
+            const reason = isNullable || hasDefaultValue
+                ? 'Simple nullable type with default value → query parameter'
+                : 'Simple type → query parameter';
+
+            return {
+                source: 'query',
+                required: !isNullable && !hasDefaultValue,
+                reason: reason
+            };
+        }
+
+        // Complex types (DTOs, models) are typically body parameters
+        return {
+            source: 'body',
+            required: true,
+            reason: 'Complex type → body parameter'
+        };
+    }
+
+    /**
+     * Check if a type represents file upload
+     */
+    private isFileType(type: string): boolean {
+        const fileTypes = [
+            'iformfile',
+            'iformfilecollection',
+            'stream',
+            'byte[]'
         ];
 
-        return simpleTypes.includes(type) || type.endsWith('?') && simpleTypes.includes(type.slice(0, -1));
+        const cleanType = type.toLowerCase().replace(/\?/g, '').replace(/\[\]/g, '');
+        return fileTypes.some(ft => cleanType.includes(ft));
+    }
+
+    private isSimpleType(type: string): boolean {
+        // Remove nullable suffix, array notation, and trim whitespace
+        const cleanType = type.replace(/\?/g, '').replace(/\[\]/g, '').trim().toLowerCase();
+
+        // More comprehensive list of C# simple types
+        const simpleTypes = [
+            // Numeric types
+            'byte', 'sbyte',
+            'short', 'ushort',
+            'int', 'int32', 'uint', 'uint32',
+            'long', 'ulong',
+            'float', 'double', 'decimal',
+            // Other built-in types
+            'bool', 'boolean',
+            'char',
+            'string',
+            'object',
+            'DateTime', 'DateTimeOffset', 'DateOnly', 'TimeOnly', 'TimeSpan',
+            'Guid',
+            'enum'
+        ];
+
+        // Check exact match
+        if (simpleTypes.includes(cleanType)) {
+            return true;
+        }
+
+        // Check if it's a nullable value type (e.g., int?, bool?, decimal?)
+        if (cleanType.includes('?')) {
+            const underlyingType = cleanType.replace('?', '');
+            return simpleTypes.includes(underlyingType);
+        }
+
+        // Check for numeric types with precision (SQL types)
+        if (/^(int|bigint|smallint|tinyint|money|smallmoney|numeric|real)\b/i.test(cleanType)) {
+            return true;
+        }
+
+        return false;
     }
 
     private processRouteParameters(route: string, parameters: ApiParameter[]): string {

@@ -42,15 +42,22 @@ export class CSharpClassParser {
      * @param className The name of the class to find
      * @returns Array of class properties, or null if class not found
      */
-    parseClassDefinition(document: vscode.TextDocument, className: string): ClassProperty[] | null {
+    parseClassDefinition(document: vscode.TextDocument, className: string, parsedClasses: Set<string> = new Set()): ClassProperty[] | null {
         // Extract inner type if generic
         const actualClassName = this.extractInnerType(className);
+
+        // Prevent infinite recursion
+        if (parsedClasses.has(actualClassName)) {
+            console.log(`[CSharpClassParser] 🔄 Skipping already parsed class: ${actualClassName}`);
+            return [];
+        }
 
         // Check cache first
         const cached = this.cache.get(actualClassName);
         if (cached) {
             return cached.properties;
         }
+
         const text = document.getText();
         const lines = text.split('\n');
 
@@ -65,16 +72,55 @@ export class CSharpClassParser {
 
         console.log(`[CSharpClassParser] Found class ${actualClassName} at line ${classLineIndex}`);
 
-        // Extract properties from the class
-        const properties = this.extractClassProperties(lines, classLineIndex);
-        console.log(`[CSharpClassParser] Extracted ${properties.length} properties from ${actualClassName}`);
+        // Add to parsed set to prevent infinite recursion
+        parsedClasses.add(actualClassName);
 
-        // Cache the result
-        if (properties.length > 0) {
-            this.cache.set(actualClassName, properties, null, document.uri.fsPath);
+        // Extract base class name from class definition
+        const classDefinitionLine = lines[classLineIndex].trim();
+        const baseClassName = this.extractBaseClassName(classDefinitionLine);
+
+        let allProperties: ClassProperty[] = [];
+
+        // If there's a base class, recursively parse it first
+        if (baseClassName && !this.isSimpleType(baseClassName)) {
+            console.log(`[CSharpClassParser] 🧬 Found base class: ${baseClassName}`);
+            const baseClassProperties = this.parseClassDefinition(document, baseClassName, parsedClasses);
+            if (baseClassProperties && baseClassProperties.length > 0) {
+                console.log(`[CSharpClassParser]   ✅ Extracted ${baseClassProperties.length} properties from base class`);
+                allProperties = [...baseClassProperties];
+            }
         }
 
-        return properties;
+        // Extract properties from the current class
+        const currentClassProperties = this.extractClassProperties(lines, classLineIndex);
+        console.log(`[CSharpClassParser] Extracted ${currentClassProperties.length} properties from ${actualClassName}`);
+
+        // Merge properties: current class properties override base class properties with the same name
+        const propertyMap = new Map<string, ClassProperty>();
+
+        // First, add all base class properties
+        for (const prop of allProperties) {
+            propertyMap.set(prop.name, prop);
+        }
+
+        // Then, add current class properties (overriding any duplicate names)
+        for (const prop of currentClassProperties) {
+            propertyMap.set(prop.name, prop);
+            if (allProperties.some(p => p.name === prop.name)) {
+                console.log(`[CSharpClassParser]   🔄 Property '${prop.name}' overridden in ${actualClassName}`);
+            }
+        }
+
+        // Convert back to array
+        allProperties = Array.from(propertyMap.values());
+        console.log(`[CSharpClassParser] Total properties (including inherited, with overrides): ${allProperties.length}`);
+
+        // Cache the result
+        if (allProperties.length > 0) {
+            this.cache.set(actualClassName, allProperties, null, document.uri.fsPath);
+        }
+
+        return allProperties;
     }
 
     /**
@@ -114,7 +160,7 @@ export class CSharpClassParser {
     private generateSearchPatterns(className: string, usingStatements: string[]): string[] {
         const patterns: string[] = [];
 
-        // Pattern 1: Direct class file name match
+        // Pattern 1: Direct class file name match (most common)
         patterns.push(`**/${className}.cs`);
 
         // Pattern 2: Based on using statements, generate namespace-based paths
@@ -138,6 +184,9 @@ export class CSharpClassParser {
             }
         }
 
+        // Pattern 3: Global C# file search - search all .cs files as a fallback
+        patterns.push(`**/*.cs`);
+
         // Remove duplicates
         const uniquePatterns = Array.from(new Set(patterns));
         console.log(`[CSharpClassParser] 🔍 Generated ${uniquePatterns.length} search patterns for ${className}`);
@@ -157,21 +206,40 @@ export class CSharpClassParser {
         // Generate search patterns
         const patterns = this.generateSearchPatterns(className, usingStatements);
 
+        // Track whether we found the class
+        let found = false;
+
         // Search using each pattern until we find the class
         for (const pattern of patterns) {
             console.log(`[CSharpClassParser]   🔍 Trying pattern: ${pattern}`);
 
             try {
+                // For global patterns like **/*.cs, use a higher limit and add more exclusions
+                const isGlobalPattern = pattern === '**/*.cs';
+                const excludePattern = isGlobalPattern
+                    ? '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**,**/test/**,**/tests/**,**/Test/**,**/Tests/**,**/__tests__/**'
+                    : '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**';
+
+                const fileLimit = isGlobalPattern ? 500 : 100;
+
                 const files = await vscode.workspace.findFiles(
                     pattern,
-                    '**/node_modules/**,**/bin/**,**/obj/**,**/.git/**,**/packages/**',
-                    100 // Limit per pattern to avoid overwhelming
+                    excludePattern,
+                    fileLimit
                 );
 
                 console.log(`[CSharpClassParser]     Found ${files.length} files matching pattern`);
 
+                // If no files found and this is a global search, skip to next pattern
+                if (files.length === 0 && isGlobalPattern) {
+                    console.log(`[CSharpClassParser]     ⏭️ No .cs files found in global search, skipping...`);
+                    continue;
+                }
+
                 // Check each file to see if it contains the class
+                let checkedCount = 0;
                 for (const fileUri of files) {
+                    checkedCount++;
                     try {
                         const document = await vscode.workspace.openTextDocument(fileUri);
                         const text = document.getText();
@@ -179,7 +247,8 @@ export class CSharpClassParser {
                         // Quick check: does this file contain the class definition?
                         const classRegex = new RegExp(`\\bclass\\s+${className}\\b`);
                         if (classRegex.test(text)) {
-                            console.log(`[CSharpClassParser]     ✅ Found ${className} in ${fileUri.fsPath}`);
+                            console.log(`[CSharpClassParser]     ✅ Found ${className} in ${fileUri.fsPath} (checked ${checkedCount}/${files.length} files)`);
+                            found = true;
                             return document;
                         }
                     } catch (fileError) {
@@ -187,12 +256,20 @@ export class CSharpClassParser {
                         continue;
                     }
                 }
+
+                console.log(`[CSharpClassParser]     Checked ${checkedCount} files, class not found`);
             } catch (searchError) {
                 console.error(`[CSharpClassParser]   ❌ Error searching with pattern ${pattern}:`, searchError);
                 continue;
             }
+
+            // If we found the class, break out of the loop
+            if (found) {
+                break;
+            }
         }
 
+        console.log(`[CSharpClassParser] ❌ Class ${className} not found in any file`);
         return null;
     }
 
@@ -373,6 +450,33 @@ export class CSharpClassParser {
             }
         }
         return -1;
+    }
+
+    /**
+     * Extract base class name from class definition line
+     * @param classDefinitionLine The class definition line (e.g., "public class UpdateProductDto : BaseDto")
+     * @returns The base class name, or null if no base class
+     */
+    private extractBaseClassName(classDefinitionLine: string): string | null {
+        // Match patterns like:
+        // "public class UpdateProductDto : BaseDto"
+        // "class ProductDto : Entity<int>"
+        // "public class CreateProductDto : ProductDto"
+        const baseClassMatch = classDefinitionLine.match(/:\s*([\w\.]+)/);
+        if (baseClassMatch) {
+            let baseClassName = baseClassMatch[1].trim();
+
+            // Remove generic type parameters, e.g., "Entity<int>" -> "Entity"
+            baseClassName = baseClassName.replace(/<[^>]+>/g, '').trim();
+
+            // Skip System.Object and its aliases
+            if (baseClassName.toLowerCase() === 'object') {
+                return null;
+            }
+
+            return baseClassName;
+        }
+        return null;
     }
 
     private extractClassProperties(lines: string[], classLineIndex: number): ClassProperty[] {
