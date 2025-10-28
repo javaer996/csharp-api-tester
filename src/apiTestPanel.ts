@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ApiEndpointInfo } from './apiEndpointDetector';
+import { ApiEndpointInfo, ApiEndpointDetector } from './apiEndpointDetector';
 import { ApiRequestGenerator, GeneratedRequest } from './apiRequestGenerator';
 import { EnvironmentManager, Environment } from './environmentManager';
 import { AIService } from './aiService';
@@ -18,11 +18,14 @@ export class ApiTestPanel {
     private _aiService: AIService;
     private _panelKey: string;
     private _lastAIConversation: any | null = null; // Store conversation for this panel
+    private _detector: ApiEndpointDetector; // ⭐ NEW: Shared detector instance for caching
 
     private _parsingCancelled: boolean = false;
     private _sourceDocument: vscode.TextDocument | undefined;
 
-    public static createOrShow(extensionUri: vscode.Uri, endpoint?: ApiEndpointInfo) {
+    public static createOrShow(extensionUri: vscode.Uri, detector: ApiEndpointDetector, endpoint?: ApiEndpointInfo) {
+        console.log('[ApiTestPanel] 🎯 createOrShow called with endpoint:', endpoint?.route, 'detector provided:', !!detector);
+
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
@@ -31,6 +34,8 @@ export class ApiTestPanel {
         const panelKey = endpoint
             ? `${endpoint.method}-${endpoint.route}`
             : 'default';
+
+        console.log('[ApiTestPanel] 📋 Panel key:', panelKey, 'existing panels:', Array.from(this.panels.keys()));
 
         // If we already have a panel for this endpoint, show it
         if (ApiTestPanel.panels.has(panelKey)) {
@@ -60,7 +65,7 @@ export class ApiTestPanel {
             }
         );
 
-        const apiTestPanel = new ApiTestPanel(panel, extensionUri, endpoint, panelKey);
+        const apiTestPanel = new ApiTestPanel(panel, extensionUri, endpoint, panelKey, detector);
         ApiTestPanel.panels.set(panelKey, apiTestPanel);
     }
 
@@ -68,7 +73,8 @@ export class ApiTestPanel {
         panel: vscode.WebviewPanel,
         _extensionUri: vscode.Uri,
         endpoint: ApiEndpointInfo | undefined,
-        panelKey: string
+        panelKey: string,
+        detector: ApiEndpointDetector
     ) {
         this._panel = panel;
         this._extensionUri = _extensionUri;
@@ -77,6 +83,13 @@ export class ApiTestPanel {
         this._requestGenerator = new ApiRequestGenerator();
         this._environmentManager = EnvironmentManager.getInstance();
         this._aiService = AIService.getInstance();
+        // ⭐ CRITICAL: Always use the provided detector to maintain cache consistency
+        if (!detector) {
+            console.error('[ApiTestPanel] ❌ ERROR: No detector provided to ApiTestPanel constructor! This will cause cache loss.');
+            throw new Error('ApiEndpointDetector is required to maintain cache consistency');
+        }
+        this._detector = detector;
+        console.log('[ApiTestPanel] ✅ Using shared ApiEndpointDetector instance for consistent caching');
 
         // Set the webview's initial html content
         this.updateContent();
@@ -241,9 +254,18 @@ export class ApiTestPanel {
             return;
         }
 
-        // Get class parser from detector
-        const detector = new (require('./apiEndpointDetector').ApiEndpointDetector)();
-        const classParser = detector.getClassParser();
+        // ⭐ CRITICAL FIX: Use the shared detector instance passed to the panel to maintain cache across calls
+        if (!this._detector) {
+            console.error('[ApiTestPanel] ❌ ERROR: No detector instance available! This should never happen with the new constructor.');
+            this._panel.webview.postMessage({
+                type: 'parsingFailed',
+                message: '内部错误: Detector实例丢失,请重新打开测试面板'
+            });
+            return;
+        }
+
+        console.log('[ApiTestPanel] 🎯 Using shared detector for parsing - cache should be preserved');
+        const classParser = this._detector.getClassParser();
 
         // Track parsed classes to avoid infinite recursion
         const parsedClasses = new Set<string>();
@@ -275,7 +297,9 @@ export class ApiTestPanel {
                         document,
                         true, // Enable recursive parsing
                         parsedClasses,
-                        0 // Start at depth 0
+                        0, // Start at depth 0
+                        undefined, // lastFoundDocument (unknown at first call)
+                        document // ⭐ CRITICAL: Pass document as currentClassDocument to enable same-file optimization
                     );
 
                     // Check cancellation after async operation

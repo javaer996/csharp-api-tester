@@ -36,10 +36,10 @@ export function activate(context: vscode.ExtensionContext) {
         try {
             if (apiInfo) {
                 console.log('✅ Creating API test panel with endpoint info');
-                ApiTestPanel.createOrShow(context.extensionUri, apiInfo);
+                ApiTestPanel.createOrShow(context.extensionUri, detector, apiInfo);
             } else {
                 console.log('❌ No API info provided, showing empty panel');
-                ApiTestPanel.createOrShow(context.extensionUri);
+                ApiTestPanel.createOrShow(context.extensionUri, detector, undefined);
             }
         } catch (error) {
             console.error('❌ Error in testApi command:', error);
@@ -71,7 +71,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     const showApiTestPanelCommand = vscode.commands.registerCommand('csharpApiTester.showApiTestPanel', () => {
-        ApiTestPanel.createOrShow(context.extensionUri);
+        ApiTestPanel.createOrShow(context.extensionUri, detector, undefined);
     });
 
     const debugApiDetectionCommand = vscode.commands.registerCommand('csharpApiTester.debugApiDetection', async () => {
@@ -184,7 +184,7 @@ export function activate(context: vscode.ExtensionContext) {
             };
 
             console.log('🧪 Creating test panel...');
-            ApiTestPanel.createOrShow(context.extensionUri, testEndpoint);
+            ApiTestPanel.createOrShow(context.extensionUri, detector, testEndpoint);
             vscode.window.showInformationMessage('API Test Panel should now be open!');
         } catch (error) {
             console.error('❌ Error creating test panel:', error);
