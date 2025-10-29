@@ -9,6 +9,12 @@ export interface ClassProperty {
     _baseClassWarning?: string;  // Warning message when base class parsing fails
 }
 
+export interface EnumInfo {
+    isEnum: true;
+    firstValue: string;
+    allValues: string[];
+}
+
 export class CSharpClassParser {
     private cache: ClassDefinitionCache;
     private fileClassCache: Map<string, Set<string>>; // filePath -> Set of class names in that file
@@ -46,24 +52,30 @@ export class CSharpClassParser {
     }
 
     /**
-     * Extract all class names from a document
+     * Extract all class and enum names from a document
      * @param document The document to scan
-     * @returns Set of class names found in the document
+     * @returns Set of type names found in the document
      */
     private extractAllClassNamesFromDocument(document: vscode.TextDocument): Set<string> {
         const text = document.getText();
-        const classNames = new Set<string>();
+        const typeNames = new Set<string>();
 
         // Match all class definitions: public class ClassName, class ClassName : BaseClass, etc.
         const classRegex = /\bclass\s+(\w+)/g;
         let match;
 
         while ((match = classRegex.exec(text)) !== null) {
-            classNames.add(match[1]);
+            typeNames.add(match[1]);
         }
 
-        console.log(`[CSharpClassParser] 📄 Extracted ${classNames.size} class names from ${document.uri.fsPath}: [${Array.from(classNames).join(', ')}]`);
-        return classNames;
+        // Match all enum definitions: public enum EnumName, enum EnumName, etc.
+        const enumRegex = /\benum\s+(\w+)/g;
+        while ((match = enumRegex.exec(text)) !== null) {
+            typeNames.add(match[1]);
+        }
+
+        console.log(`[CSharpClassParser] 📄 Extracted ${typeNames.size} type names from ${document.uri.fsPath}: [${Array.from(typeNames).join(', ')}]`);
+        return typeNames;
     }
 
     /**
@@ -433,9 +445,10 @@ export class CSharpClassParser {
                         const document = await vscode.workspace.openTextDocument(fileUri);
                         const text = document.getText();
 
-                        // Quick check: does this file contain the class definition?
+                        // Quick check: does this file contain the class or enum definition?
                         const classRegex = new RegExp(`\\bclass\\s+${className}\\b`);
-                        if (classRegex.test(text)) {
+                        const enumRegex = new RegExp(`\\benum\\s+${className}\\b`);
+                        if (classRegex.test(text) || enumRegex.test(text)) {
                             console.log(`[CSharpClassParser]     ✅ Found ${className} in ${fileUri.fsPath} (checked ${checkedCount}/${files.length} files)`);
 
                             // ⭐ KEY OPTIMIZATION: Extract and cache all class names from this file
@@ -668,6 +681,17 @@ export class CSharpClassParser {
                 continue;
             }
 
+            // Check if this type is an enum - if so, handle it specially
+            console.log(`[CSharpClassParser] 🔍 Checking if ${baseType} is an enum...`);
+            const enumInfo = await this.findEnumInWorkspace(baseType, currentDocument);
+            if (enumInfo) {
+                console.log(`[CSharpClassParser] ✅ Found enum ${baseType}, marking as enum type`);
+                // Mark this property as an enum by storing enum info in a special field
+                prop._baseClassWarning = `ENUM_INFO:${enumInfo.firstValue}|${enumInfo.allValues.join(',')}`;
+                console.log(`[CSharpClassParser] ✅ Enum ${baseType} marked for property ${prop.name}`);
+                continue;
+            }
+
             // Check if we already parsed this type in this batch
             if (parsedResults.has(baseType)) {
                 console.log(`[CSharpClassParser]     ♻️ Reusing already parsed results for ${baseType}`);
@@ -779,6 +803,148 @@ export class CSharpClassParser {
             }
         }
         return -1;
+    }
+
+    /**
+     * Find enum definition in lines
+     * @param lines Array of lines to search
+     * @param enumName The enum name to find
+     * @returns Line index where enum is found, or -1 if not found
+     */
+    private findEnumDefinition(lines: string[], enumName: string): number {
+        // ⭐ PERFORMANCE: Create regex once, not in every loop iteration
+        const enumRegex = new RegExp(`\\benum\\s+${enumName}\\b`);
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+
+            // Look for enum definition: public enum EnumName, enum EnumName, etc.
+            if (enumRegex.test(line)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Parse enum definition and extract enum values
+     * @param lines Array of lines containing the enum
+     * @param enumLineIndex Line index where enum starts
+     * @returns EnumInfo with extracted values, or null if parsing failed
+     */
+    private parseEnumDefinition(lines: string[], enumLineIndex: number): EnumInfo | null {
+        const enumValues: string[] = [];
+        let braceCount = 0;
+        let inEnum = false;
+
+        console.log(`[CSharpClassParser] Parsing enum starting at line ${enumLineIndex}`);
+
+        // Start from the enum line and parse until we exit the enum
+        for (let i = enumLineIndex; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmedLine = line.trim();
+
+            // Count braces to track scope
+            for (const char of line) {
+                if (char === '{') {
+                    braceCount++;
+                    if (!inEnum) inEnum = true;
+                }
+                if (char === '}') {
+                    braceCount--;
+                }
+            }
+
+            // If we've exited the enum, stop
+            if (inEnum && braceCount === 0) {
+                break;
+            }
+
+            // Skip comments, attributes, and empty lines when not in enum scope
+            if (!inEnum && (trimmedLine.startsWith('//') || trimmedLine.startsWith('///') ||
+                trimmedLine.startsWith('[') || trimmedLine.startsWith('*') ||
+                trimmedLine === '')) {
+                continue;
+            }
+
+            // Extract enum values when inside enum scope
+            if (inEnum && trimmedLine && !trimmedLine.startsWith('//') &&
+                !trimmedLine.startsWith('///') && !trimmedLine.startsWith('[') &&
+                !trimmedLine.startsWith('*')) {
+
+                // Match enum member patterns: VALUE, VALUE = 1, [EnumMember(Value = "SMALL")] SMALL, etc.
+                const enumMemberRegex = /(?:\[[^\]]*\]\s*)?(\w+)(?:\s*=\s*[^,}]+)?/;
+                const match = trimmedLine.match(enumMemberRegex);
+
+                if (match && match[1]) {
+                    const enumValue = match[1];
+                    enumValues.push(enumValue);
+                    console.log(`[CSharpClassParser] Found enum value: ${enumValue}`);
+                }
+            }
+        }
+
+        if (enumValues.length === 0) {
+            console.log(`[CSharpClassParser] No enum values found`);
+            return null;
+        }
+
+        console.log(`[CSharpClassParser] Extracted ${enumValues.length} enum values: [${enumValues.join(', ')}]`);
+
+        return {
+            isEnum: true,
+            firstValue: enumValues[0],
+            allValues: enumValues
+        };
+    }
+
+    /**
+     * Check if a type is an enum and parse it
+     * @param document The document to search in
+     * @param typeName The type name to check
+     * @returns EnumInfo if it's an enum, null otherwise
+     */
+    async parseEnumIfEnum(document: vscode.TextDocument, typeName: string): Promise<EnumInfo | null> {
+        const lines = this.getDocumentLines(document);
+
+        // Try to find enum definition
+        const enumLineIndex = this.findEnumDefinition(lines, typeName);
+        if (enumLineIndex === -1) {
+            return null; // Not an enum in this document
+        }
+
+        console.log(`[CSharpClassParser] Found enum ${typeName} at line ${enumLineIndex}`);
+        return this.parseEnumDefinition(lines, enumLineIndex);
+    }
+
+    /**
+     * Search for an enum in workspace files
+     * @param enumName The enum name to find
+     * @param currentDocument Current document to extract using statements from
+     * @returns EnumInfo if found, null otherwise
+     */
+    async findEnumInWorkspace(enumName: string, currentDocument: vscode.TextDocument): Promise<EnumInfo | null> {
+        console.log(`[CSharpClassParser] Searching workspace for enum: ${enumName}`);
+
+        // First, try current document
+        const enumInCurrent = await this.parseEnumIfEnum(currentDocument, enumName);
+        if (enumInCurrent) {
+            console.log(`[CSharpClassParser] ✅ Found enum ${enumName} in current document`);
+            return enumInCurrent;
+        }
+
+        // Use intelligent search based on using statements (same as class search)
+        const foundDocument = await this.findClassFileByUsing(enumName, currentDocument);
+        if (foundDocument) {
+            const enumInfo = await this.parseEnumIfEnum(foundDocument, enumName);
+            if (enumInfo) {
+                console.log(`[CSharpClassParser] ✅ Found enum ${enumName} in workspace`);
+                return enumInfo;
+            }
+        }
+
+        console.log(`[CSharpClassParser] ❌ Enum ${enumName} not found in workspace`);
+        return null;
     }
 
     /**

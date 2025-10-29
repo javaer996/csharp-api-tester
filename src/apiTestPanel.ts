@@ -278,8 +278,19 @@ export class ApiTestPanel {
                 }
 
                 if (Array.isArray(p.properties) && p.properties.length === 0) {
-                    console.log(`[ApiTestPanel] ⏭️ ${p.type} already parsed (failed, cached as [])`);
-                    return false;
+                    // Check if this might be an enum type that should be retried
+                    const cleanTypeName = p.type.replace(/\?/g, '').replace(/<[^>]*>/g, '').trim();
+                    const isLikelyEnum = cleanTypeName.toLowerCase().endsWith('enum') ||
+                                        ['status', 'type', 'state', 'mode', 'style'].some(suffix =>
+                                            cleanTypeName.toLowerCase().endsWith(suffix));
+
+                    if (isLikelyEnum) {
+                        console.log(`[ApiTestPanel] 🔄 ${p.type} failed before but might be enum, retrying...`);
+                        return true;
+                    } else {
+                        console.log(`[ApiTestPanel] ⏭️ ${p.type} already parsed (failed, cached as [])`);
+                        return false;
+                    }
                 }
 
                 if (Array.isArray(p.properties) && p.properties.length > 0) {
@@ -352,40 +363,70 @@ export class ApiTestPanel {
                     message: `⚡ 正在解析 ${param.type}...`
                 });
 
-                // Parse with full recursive support (CSharpClassParser now handles all recursion)
-                console.log(`[ApiTestPanel] 📦 Parsing ${param.type} with full recursion...`);
+                // First check if the type is an enum
+                console.log(`[ApiTestPanel] 🔍 Checking if ${param.type} is an enum...`);
+                let enumInfo = null;
                 try {
-                    const properties = await classParser.parseClassDefinitionFromWorkspace(
-                        param.type,
-                        document,
-                        true, // Enable recursive parsing
-                        parsedClasses,
-                        0, // Start at depth 0
-                        undefined, // lastFoundDocument (unknown at first call)
-                        document // ⭐ CRITICAL: Pass document as currentClassDocument to enable same-file optimization
-                    );
+                    // Remove nullable marker and generic type parameters for enum detection
+                    const cleanTypeName = param.type.replace(/\?/g, '').replace(/<[^>]*>/g, '').trim();
+                    console.log(`[ApiTestPanel] 🔍 Using clean type name: ${cleanTypeName} (original: ${param.type})`);
 
-                    // Check cancellation after async operation
-                    if (this._parsingCancelled) {
-                        console.log('[ApiTestPanel] 🚫 Parsing cancelled after class definition parse');
-                        return;
-                    }
+                    enumInfo = await classParser.findEnumInWorkspace(cleanTypeName, document);
+                    console.log(`[ApiTestPanel] 🔍 Enum search result for ${cleanTypeName}:`, enumInfo ? 'FOUND' : 'NOT FOUND');
 
-                    if (properties && properties.length > 0) {
-                        param.properties = properties;
-                        console.log(`[ApiTestPanel] ✅ Parsed ${properties.length} properties for ${param.type} (including nested)`);
+                    if (enumInfo) {
+                        // It's an enum! Create a special property to mark it as enum
+                        console.log(`[ApiTestPanel] ✅ Found enum ${param.type} with values: [${enumInfo.allValues.join(', ')}]`);
+                        param.properties = [{
+                            name: '_enum',
+                            type: 'enum',
+                            required: true,
+                            // Store enum info in a special way
+                            _baseClassWarning: `ENUM_INFO:${enumInfo.firstValue}|${enumInfo.allValues.join(',')}`
+                        }];
                     } else {
-                        // ⭐ CRITICAL: 解析失败时，设置为空数组，标记为"已解析但失败"
-                        // 这样下次打开时就不会重新解析，而是直接使用缓存的错误信息
-                        param.properties = [];
-                        console.log(`[ApiTestPanel] ⚠️ No properties found for ${param.type}, marked as parsed (failed)`);
+                        // Not an enum, parse as regular class
+                        console.log(`[ApiTestPanel] 📦 Parsing ${param.type} as class with full recursion...`);
+                        const properties = await classParser.parseClassDefinitionFromWorkspace(
+                            param.type,
+                            document,
+                            true, // Enable recursive parsing
+                            parsedClasses,
+                            0, // Start at depth 0
+                            undefined, // lastFoundDocument (unknown at first call)
+                            document // ⭐ CRITICAL: Pass document as currentClassDocument to enable same-file optimization
+                        );
+
+                        // Check cancellation after async operation
+                        if (this._parsingCancelled) {
+                            console.log('[ApiTestPanel] 🚫 Parsing cancelled after class definition parse');
+                            return;
+                        }
+
+                        // Regular class handling
+                        if (properties && properties.length > 0) {
+                            param.properties = properties;
+                            console.log(`[ApiTestPanel] ✅ Parsed ${properties.length} properties for ${param.type} (including nested)`);
+                        } else {
+                            // ⭐ CRITICAL: 解析失败时，设置为空数组，标记为"已解析但失败"
+                            // 这样下次打开时就不会重新解析，而是直接使用缓存的错误信息
+                            param.properties = [];
+                            console.log(`[ApiTestPanel] ⚠️ No properties found for ${param.type}, marked as parsed (failed)`);
+                        }
+
+                        // Get full class definition for AI context
+                        const classDefinition = await classParser.getClassDefinitionTextFromWorkspace(param.type, document);
+                        if (classDefinition) {
+                            param.classDefinition = classDefinition;
+                        }
                     }
 
-                    // Get full class definition for AI context
-                    const classDefinition = await classParser.getClassDefinitionTextFromWorkspace(param.type, document);
-                    if (classDefinition) {
-                        param.classDefinition = classDefinition;
+                    // Get full class/enum definition for AI context
+                    if (enumInfo) {
+                        // For enums, create a simple definition showing the enum values
+                        param.classDefinition = `// Enum ${param.type}\npublic enum ${param.type} {\n${enumInfo.allValues.map((v: string) => `    ${v}`).join(',\n')}\n}`;
                     }
+
                 } catch (error) {
                     console.error(`[ApiTestPanel] ❌ Failed to parse ${param.type}:`, error);
                     // ⭐ CRITICAL: 异常时也标记为"已解析但失败"

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiEndpointInfo, ApiParameter } from './apiEndpointDetector';
 import { Environment } from './environmentManager';
-import { ClassProperty, CSharpClassParser } from './csharpClassParser';
+import { ClassProperty, CSharpClassParser, EnumInfo } from './csharpClassParser';
 
 export interface GeneratedRequest {
     url: string;
@@ -35,7 +35,7 @@ export class ApiRequestGenerator {
     };
 
     constructor(classParser?: CSharpClassParser) {
-        this.classParser = classParser;
+        this.classParser = classParser || new CSharpClassParser();
     }
 
     generateRequest(endpoint: ApiEndpointInfo, baseUrl: string): GeneratedRequest {
@@ -192,6 +192,15 @@ export class ApiRequestGenerator {
             // Single body parameter - use class properties if available
             const bodyParam = bodyParams[0];
             if (bodyParam.properties && bodyParam.properties.length > 0) {
+                // Check if this is an enum marker
+                if (bodyParam.properties[0].name === '_enum' && bodyParam.properties[0]._baseClassWarning?.startsWith('ENUM_INFO:')) {
+                    const enumData = bodyParam.properties[0]._baseClassWarning.substring('ENUM_INFO:'.length);
+                    const [firstValue, allValuesStr] = enumData.split('|');
+
+                    console.log(`[ApiRequestGenerator] Generating enum body with first value: ${firstValue}`);
+                    return { body: firstValue, errors: [] };
+                }
+
                 console.log(`[ApiRequestGenerator] Generating body from ${bodyParam.properties.length} class properties`);
 
                 // Check for base class warning
@@ -261,6 +270,20 @@ export class ApiRequestGenerator {
         const errors: string[] = [];
 
         for (const prop of properties) {
+            // Check if this property is marked as an enum
+            if (prop._baseClassWarning?.startsWith('ENUM_INFO:')) {
+                // Extract enum info from the warning message
+                const enumData = prop._baseClassWarning.substring('ENUM_INFO:'.length);
+                const [firstValue, allValuesStr] = enumData.split('|');
+                const allValues = allValuesStr.split(',');
+
+                console.log(`[ApiRequestGenerator] Processing enum property ${prop.name} with values: [${allValues.join(', ')}]`);
+
+                // Set the enum value directly
+                obj[prop.name] = firstValue;
+                continue;
+            }
+
             // Check if property type is a complex type that might have nested properties
             const isComplexType = !this.isSimpleType(prop.type);
 

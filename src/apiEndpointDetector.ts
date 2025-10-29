@@ -515,6 +515,19 @@ export class ApiEndpointDetector {
             };
         }
 
+        // Check if this might be an enum type - enums should be treated as simple types
+        // We'll use a heuristic based on common enum naming patterns
+        const isLikelyEnum = this.isLikelyEnumType(cleanType, paramName);
+
+        if (isLikelyEnum) {
+            console.log(`[ApiEndpointDetector] Detected likely enum type: ${cleanType}`);
+            return {
+                source: 'query',
+                required: !isNullable && !hasDefaultValue,
+                reason: 'Enum type → query parameter (treated as string)'
+            };
+        }
+
         // Complex types (DTOs, models) are typically body parameters
         return {
             source: 'body',
@@ -604,6 +617,73 @@ export class ApiEndpointDetector {
         }
 
         return processedRoute;
+    }
+
+    /**
+     * Check if a type is likely an enum based on naming patterns
+     * @param type The type name to check
+     * @param paramName The parameter name (for additional context)
+     * @returns true if the type is likely an enum
+     */
+    private isLikelyEnumType(type: string, paramName: string): boolean {
+        const lowerType = type.toLowerCase();
+        const lowerParam = paramName.toLowerCase();
+
+        // Common enum suffixes
+        const enumSuffixes = [
+            'enum',
+            'type',
+            'status',
+            'state',
+            'mode',
+            'level',
+            'category',
+            'style',
+            'kind',
+            'sort',
+            'order',
+            'direction',
+            'priority',
+            'severity'
+        ];
+
+        // Check if type name ends with common enum suffixes
+        for (const suffix of enumSuffixes) {
+            if (lowerType.endsWith(suffix)) {
+                console.log(`[ApiEndpointDetector] Type ${type} ends with ${suffix} - likely enum`);
+                return true;
+            }
+        }
+
+        // Check for common enum parameter names
+        const enumParamNames = [
+            'status',
+            'type',
+            'state',
+            'mode',
+            'sort',
+            'order',
+            'direction',
+            'level',
+            'priority',
+            'category',
+            'style'
+        ];
+
+        for (const enumParam of enumParamNames) {
+            if (lowerParam.includes(enumParam)) {
+                console.log(`[ApiEndpointDetector] Parameter name ${paramName} suggests enum type`);
+                return true;
+            }
+        }
+
+        // Check for PascalCase enum patterns (e.g., UserStatus, OrderType, PaymentMode)
+        if (/^[A-Z][a-zA-Z0-9]*(Status|Type|State|Mode|Level|Category|Style|Kind|Sort|Order|Direction|Priority|Severity)$/.test(type)) {
+            console.log(`[ApiEndpointDetector] Type ${type} matches PascalCase enum pattern`);
+            return true;
+        }
+
+        return false;
     }
 
     /**
