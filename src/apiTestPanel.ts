@@ -1028,7 +1028,27 @@ export class ApiTestPanel {
 
         // Prepare data for JavaScript injection
         const endpointMethod = endpoint.method;
+        const endpointMethodUpper = endpointMethod.toUpperCase();
         const endpointRoute = endpoint.route;
+
+        const standardHttpMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT'];
+        const httpMethods = Array.from(new Set([endpointMethodUpper, ...standardHttpMethods]));
+        const methodOptionsHtml = httpMethods
+            .map(method => `<option value="${method}" ${method === endpointMethodUpper ? 'selected' : ''}>${method}</option>`)
+            .join('');
+        const methodClassMap: Record<string, string> = {
+            GET: 'method-get',
+            POST: 'method-post',
+            PUT: 'method-put',
+            DELETE: 'method-delete',
+            PATCH: 'method-patch',
+            HEAD: 'method-head',
+            OPTIONS: 'method-options',
+            TRACE: 'method-trace',
+            CONNECT: 'method-connect'
+        };
+        const initialMethodClass = methodClassMap[endpointMethodUpper] ?? 'method-generic';
+        const methodClassMapJson = JSON.stringify(methodClassMap);
 
         // Parse query params from the generated request
         const queryParamsJson = JSON.stringify(request.queryParams);
@@ -1042,9 +1062,6 @@ export class ApiTestPanel {
 
         // Get base URL without query string
         const urlWithoutQuery = request.url.split('?')[0];
-
-        // Get method badge class
-        const methodClass = `method-${endpointMethod.toLowerCase()}`;
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -1095,15 +1112,50 @@ export class ApiTestPanel {
             font-weight: bold;
             font-size: 13px;
             text-align: center;
-            min-width: 70px;
+            min-width: 90px;
             flex-shrink: 0;
         }
 
-        .method-get { background: #61AFFE; color: white; }
-        .method-post { background: #49CC90; color: white; }
-        .method-put { background: #FCA130; color: white; }
-        .method-delete { background: #F93E3E; color: white; }
-        .method-patch { background: #50E3C2; color: white; }
+        .method-select {
+            border: none;
+            background-color: transparent;
+            color: inherit;
+            text-transform: uppercase;
+            cursor: pointer;
+            padding-right: 32px;
+            font-weight: 600;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='currentColor' d='M6 8a1 1 0 0 1-.707-.293l-5-5A1 1 0 0 1 1.707.293L6 4.586 10.293.293a1 1 0 0 1 1.414 1.414l-5 5A1 1 0 0 1 6 8z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 10px;
+        }
+
+        .method-select:focus {
+            outline: none;
+        }
+
+        .method-select option {
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+        }
+
+        .method-get { background-color: #61AFFE; color: white; }
+        .method-post { background-color: #49CC90; color: white; }
+        .method-put { background-color: #FCA130; color: white; }
+        .method-delete { background-color: #F93E3E; color: white; }
+        .method-patch { background-color: #50E3C2; color: white; }
+        .method-head { background-color: #9B59B6; color: white; }
+        .method-options { background-color: #16A085; color: white; }
+        .method-trace { background-color: #2D9CDB; color: white; }
+        .method-connect { background-color: #34495E; color: white; }
+        .method-generic {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: 1px solid var(--vscode-button-border);
+        }
 
         .url-input {
             flex: 1;
@@ -1874,7 +1926,9 @@ export class ApiTestPanel {
     <div class="container">
         <!-- Request Line -->
         <div class="request-line">
-            <span class="method-badge ${methodClass}">${endpointMethod}</span>
+            <select id="http-method" class="method-select method-badge ${initialMethodClass}" aria-label="HTTP Method">
+                ${methodOptionsHtml}
+            </select>
             <input type="text" class="url-input" id="fullUrl" value="${request.url}" />
             <button class="send-button" onclick="sendRequest()">Send</button>
             <button class="settings-button" onclick="openSettings()" title="Settings">⚙️</button>
@@ -2086,9 +2140,33 @@ export class ApiTestPanel {
         const baseUrl = '${urlWithoutQuery}';
         let originalJsonBody = ${bodyJsonWithComments ? `\`${bodyJsonWithComments}\`` : 'null'}; // Store original JSON
         let currentEditingParam = null; // For value editor
+        const methodClassMap = ${methodClassMapJson};
+        const methodFallbackClass = 'method-generic';
+        let currentMethod = '${endpointMethodUpper}';
+
+        function applyMethodAppearance(method) {
+            const selector = document.getElementById('http-method');
+            if (!selector) {
+                return;
+            }
+            Object.values(methodClassMap).forEach(cls => selector.classList.remove(cls));
+            selector.classList.remove(methodFallbackClass);
+            const targetClass = methodClassMap[method] || methodFallbackClass;
+            selector.classList.add(targetClass);
+        }
 
         // Initialize on load
         window.addEventListener('DOMContentLoaded', () => {
+            const methodSelect = document.getElementById('http-method');
+            if (methodSelect) {
+                methodSelect.addEventListener('change', () => {
+                    currentMethod = methodSelect.value.toUpperCase();
+                    applyMethodAppearance(currentMethod);
+                });
+
+                applyMethodAppearance(currentMethod);
+            }
+
             renderQueryParams();
             renderHeaders();
             renderFormFields();
@@ -2785,15 +2863,19 @@ export class ApiTestPanel {
             const url = document.getElementById('fullUrl').value;
             const bodyElement = document.getElementById('request-body');
             const body = bodyElement ? bodyElement.value : null;
+            const methodElement = document.getElementById('http-method');
+            if (methodElement) {
+                currentMethod = methodElement.value.toUpperCase();
+            }
 
             // Check if we have form data
             const hasFormData = Object.keys(formData).length > 0;
 
             try {
                 const requestData = {
-                    method: '${endpointMethod}',
+                    method: currentMethod,
                     url: url,
-                    headers: headers,
+                    headers: { ...headers },
                     body: null,
                     formData: null
                 };
