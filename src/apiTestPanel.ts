@@ -1023,8 +1023,11 @@ export class ApiTestPanel {
     }
 
     private getTestPanelHtml(endpoint: ApiEndpointInfo, request: GeneratedRequest, _defaultHeaders: Record<string, string>, currentEnvironment: Environment): string {
-        // Check if endpoint has body parameter (regardless of whether it's parsed yet)
+        // Check if endpoint has different parameter types
         const hasBodyParam = endpoint.parameters.some(p => p.source === 'body');
+        const hasFormParam = endpoint.parameters.some(p => p.source === 'form');
+        const hasQueryParam = endpoint.parameters.some(p => p.source === 'query') || Object.keys(request.queryParams).length > 0;
+        const hasHeaderParam = endpoint.parameters.some(p => p.source === 'header');
 
         // Prepare data for JavaScript injection
         const endpointMethod = endpoint.method;
@@ -1055,8 +1058,7 @@ export class ApiTestPanel {
         const headersJson = JSON.stringify(request.headers);
         const bodyJson = request.body ? JSON.stringify(request.body, null, 2) : '';
         const formDataJson = request.formData ? JSON.stringify(request.formData) : '';
-        const hasFormData = !!request.formData;
-
+        
         // Add errors as JSON comments if they exist
         const bodyJsonWithComments = this.injectErrorCommentsIntoJson(bodyJson, request.errors || []);
 
@@ -1937,33 +1939,14 @@ export class ApiTestPanel {
         <!-- Request Tabs -->
         <div class="tabs-container">
             <div class="tab-nav">
-                <button class="tab-button ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" onclick="switchTab('query')">Query</button>
-                <button class="tab-button ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length === 0 ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
-                ${hasBodyParam ? '<button class="tab-button active" onclick="switchTab(\'body\')">Body</button>' : ''}
-                ${hasFormData ? '<button class="tab-button active" onclick="switchTab(\'form\')">Form</button>' : ''}
-            </div>
-
-            <!-- Query Tab -->
-            <div class="tab-content ${!hasBodyParam && !hasFormData && Object.keys(request.queryParams).length > 0 ? 'active' : ''}" id="query-tab">
-                <table class="params-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">✓</th>
-                            <th style="width: 30%;">Key</th>
-                            <th style="width: 30%;">Value</th>
-                            <th>Description</th>
-                            <th style="width: 80px;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="query-params-body">
-                        <!-- Will be populated by JavaScript -->
-                    </tbody>
-                </table>
-                <button class="add-param-btn" onclick="addQueryParam()">+ Add Query Parameter</button>
+                <button class="tab-button ${!hasBodyParam && !hasFormParam && !hasQueryParam ? 'active' : ''}" onclick="switchTab('headers')">Headers</button>
+                <button class="tab-button ${!hasBodyParam && !hasFormParam && hasQueryParam ? 'active' : ''}" onclick="switchTab('query')">Query</button>
+                <button class="tab-button ${!hasBodyParam && hasFormParam ? 'active' : ''}" onclick="switchTab('form')">Form</button>
+                <button class="tab-button ${hasBodyParam ? 'active' : ''}" onclick="switchTab('body')">Body</button>
             </div>
 
             <!-- Headers Tab -->
-            <div class="tab-content ${Object.keys(request.queryParams).length === 0 && !hasBodyParam && !hasFormData ? 'active' : ''}" id="headers-tab">
+            <div class="tab-content ${!hasBodyParam && !hasFormParam && !hasQueryParam ? 'active' : ''}" id="headers-tab">
                 <table class="params-table">
                     <thead>
                         <tr>
@@ -1981,9 +1964,47 @@ export class ApiTestPanel {
                 <button class="add-param-btn" onclick="addHeader()">+ Add Header</button>
             </div>
 
-            ${hasBodyParam ? `
+            <!-- Query Tab -->
+            <div class="tab-content ${!hasBodyParam && !hasFormParam && hasQueryParam ? 'active' : ''}" id="query-tab">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">✓</th>
+                            <th style="width: 30%;">Key</th>
+                            <th style="width: 30%;">Value</th>
+                            <th>Description</th>
+                            <th style="width: 80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="query-params-body">
+                        <!-- Will be populated by JavaScript -->
+                    </tbody>
+                </table>
+                <button class="add-param-btn" onclick="addQueryParam()">+ Add Query Parameter</button>
+            </div>
+
+            <!-- Form Tab -->
+            <div class="tab-content ${!hasBodyParam && hasFormParam ? 'active' : ''}" id="form-tab">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">✓</th>
+                            <th style="width: 25%;">Key</th>
+                            <th style="width: 25%;">Value</th>
+                            <th style="width: 15%;">Type</th>
+                            <th>Description</th>
+                            <th style="width: 80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="form-params-body">
+                        <!-- Will be populated by JavaScript -->
+                    </tbody>
+                </table>
+                <button class="add-param-btn" onclick="addFormField()">+ Add Form Field</button>
+            </div>
+
             <!-- Body Tab -->
-            <div class="tab-content active" id="body-tab">
+            <div class="tab-content ${hasBodyParam ? 'active' : ''}" id="body-tab">
                 <div class="body-editor">
                     <!-- Parsing Status Overlay (覆盖在 textarea 上) -->
                     <div id="body-parsing-overlay" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.75); z-index: 100; align-items: center; justify-content: center;">
@@ -2015,29 +2036,6 @@ export class ApiTestPanel {
                     </div>
                 </div>
             </div>
-            ` : ''}
-
-            ${hasFormData ? `
-            <!-- Form Tab -->
-            <div class="tab-content active" id="form-tab">
-                <table class="params-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">✓</th>
-                            <th style="width: 25%;">Key</th>
-                            <th style="width: 25%;">Value</th>
-                            <th style="width: 15%;">Type</th>
-                            <th>Description</th>
-                            <th style="width: 80px;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="form-params-body">
-                        <!-- Will be populated by JavaScript -->
-                    </tbody>
-                </table>
-                <button class="add-param-btn" onclick="addFormField()">+ Add Form Field</button>
-            </div>
-            ` : ''}
         </div>
 
         <!-- Response Container -->
