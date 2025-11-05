@@ -4,7 +4,7 @@
 
 An intelligent Visual Studio Code extension that automatically detects and tests C# Web API endpoints directly from your code editor with AI-powered smart JSON generation.
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -31,23 +31,27 @@ An intelligent Visual Studio Code extension that automatically detects and tests
 
 ### 🤖 AI-Powered JSON Generation
 - Generates realistic test data based on C# class definitions
-- Understands property names and types
-- Reads C# comments and attributes for context
+- Understands property names, types, and C# XML comments
+- Reads C# class attributes for additional context
 - Supports OpenAI, Azure OpenAI, and custom AI providers
-- Preserves conversation history per API panel
+- Preserves conversation history per API panel with "View AI" feature
+- One-click restore to original template
 
 ### 🌍 Environment Management
 - Multiple environment support (Development, Staging, Production, etc.)
 - Each environment with custom base URL, base path, and headers
-- Quick switching between environments
-- Define headers per environment as needed
+- Quick switching via status bar
+- Per-environment header configuration
+- Workspace-level settings persistence
 
 ### 📝 Advanced Features
-- **Body Editor**: Full-featured JSON editor with formatting and AI generation
-- **Form Data Support**: File upload and form field testing
-- **Value Editor**: Expandable editor for long header/query values
-- **Response Viewer**: Formatted JSON with syntax highlighting
-- **Request History**: View AI conversation and restore original JSON
+- **Body Editor**: Full-featured JSON editor with syntax highlighting, formatting, and AI generation
+- **Form Data Support**: Multipart form data with file upload and text fields
+- **Value Editor**: Expandable modal editor for long header/query parameter values
+- **Response Viewer**: Formatted JSON response with syntax highlighting and collapsible structure
+- **Request History**: View AI conversation history and restore original JSON templates
+- **Smart Tab Selection**: Automatically opens the most relevant tab (Form/Body/Query/Headers)
+- **Performance Optimization**: Configurable search strategy (fast/balanced/thorough) for class definition lookup
 
 ## 📦 Installation
 
@@ -144,27 +148,37 @@ The extension automatically:
 
 When testing endpoints with complex request bodies:
 
-1. Click **"🤖 AI Generate"** button
-2. AI analyzes your C# class definition:
+1. Click **"🤖 AI Generate"** button in the Body tab
+2. AI analyzes your C# class definition including:
+   - Property names and types
+   - XML documentation comments (`/// <summary>`)
+   - Data annotation attributes
+   - Nested class structures
    ```csharp
    public class CreateUserDto
    {
        /// <summary>
        /// User's full name
        /// </summary>
+       [Required]
+       [MaxLength(100)]
        public string Name { get; set; }
 
        /// <summary>
        /// Email address
        /// </summary>
+       [EmailAddress]
        public string Email { get; set; }
 
        public int Age { get; set; }
+
+       public AddressDto Address { get; set; }
    }
    ```
-3. Generates realistic test data based on property names, types, and comments
-4. View the AI conversation with **"💬 View AI"** button
-5. Restore original template with **"↺ Restore"** button
+3. AI generates realistic test data respecting all constraints
+4. View the AI conversation and prompt with **"💬 View AI"** button
+5. Restore original JSON template with **"↺ Restore"** button
+6. All conversation history is preserved per API panel
 
 ### Tab Priority
 
@@ -182,12 +196,26 @@ The test panel intelligently selects the default tab:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `csharpApiTester.timeout` | Request timeout (ms) | 30000 |
+| `csharpApiTester.enableApiDetection` | Enable automatic API detection and CodeLens | true |
+| `csharpApiTester.searchStrategy` | Class definition search strategy | "balanced" |
+| `csharpApiTester.searchFileLimit` | Max files to search (custom strategy only) | 2000 |
 | `csharpApiTester.ai.enabled` | Enable AI features | false |
-| `csharpApiTester.ai.provider` | AI provider | "openai" |
+| `csharpApiTester.ai.provider` | AI provider (openai/azure-openai/custom) | "openai" |
 | `csharpApiTester.ai.apiKey` | AI API key | "" |
-| `csharpApiTester.ai.endpoint` | AI API endpoint | "https://api.openai.com/v1/chat/completions" |
-| `csharpApiTester.ai.model` | AI model | "gpt-3.5-turbo" |
-| `csharpApiTester.ai.maxTokens` | Max tokens | 1000 |
+| `csharpApiTester.ai.endpoint` | AI API endpoint URL | OpenAI default |
+| `csharpApiTester.ai.model` | AI model name | "gpt-3.5-turbo" |
+| `csharpApiTester.ai.maxTokens` | Max tokens per request | 1000 |
+| `csharpApiTester.ai.timeout` | AI request timeout (ms) | 60000 |
+| `csharpApiTester.ai.systemPrompt` | System prompt for AI | Default prompt |
+
+### Search Strategy
+
+Choose a search strategy based on your project size:
+
+- **fast**: Searches up to 500 .cs files (best for small projects)
+- **balanced**: Searches up to 1000 .cs files (recommended for most projects)
+- **thorough**: Searches up to 2000 .cs files (for large monorepos)
+- **custom**: Use `searchFileLimit` setting to specify exact limit
 
 ### AI Providers
 
@@ -261,22 +289,59 @@ For long header values or query parameters:
 
 | Command | Description |
 |---------|-------------|
+| `C#HttpRequest: Test API Endpoint` | Open test panel for selected endpoint |
+| `C#HttpRequest: Manage API Environments` | Open environment management dialog |
+| `C#HttpRequest: Switch Environment` | Quick switch between environments |
+| `C#HttpRequest: Configure API Base URL` | Set base URL for current environment |
+| `C#HttpRequest: Toggle API Detection` | Enable/disable automatic API detection |
 | `C#HttpRequest: Test Debug` | Verify extension activation |
 | `C#HttpRequest: Debug API Detection` | View detected endpoints in console |
-| `C#HttpRequest: Manage Environments` | Open environment management |
 
-## 📝 Examples
+## 📝 Use Cases
 
-Check the `examples/` folder for comprehensive examples:
+This extension is perfect for:
 
-- **UsersController**: CRUD operations with DTOs
-- **ProductsController**: Complex queries and updates
-- **UploadController**: File uploads and form data
-  - Single file upload
-  - Multiple files upload
-  - File with metadata
-  - Form-only submission
-  - Image upload with options
+- **Backend Developers**: Test APIs directly from controller code
+- **API Development**: Rapid prototyping and testing during development
+- **Documentation**: Generate sample requests for API documentation
+- **Testing**: Quick manual testing without leaving your editor
+- **Learning**: Understand API behavior through interactive testing
+
+## 💡 Tips & Tricks
+
+### CodeLens Visibility
+- CodeLens buttons appear automatically above API methods
+- Use `C#HttpRequest: Toggle API Detection` to enable/disable
+- Refresh the document if CodeLens doesn't appear immediately
+
+### AI Generation Best Practices
+- Add XML documentation comments for better AI understanding
+- Use descriptive property names (e.g., `userEmail` instead of `e1`)
+- Include data annotation attributes for realistic data generation
+- Review and edit AI-generated values before sending requests
+
+### Performance Optimization
+- For large projects, use "fast" search strategy to improve performance
+- For better accuracy with complex DTOs, use "thorough" strategy
+- Custom strategy allows fine-tuning based on your specific needs
+
+## 🛠️ Troubleshooting
+
+### CodeLens Not Showing
+1. Ensure the file is a C# controller with `[ApiController]` or `[Route]` attributes
+2. Check that API detection is enabled in settings
+3. Try reloading the VS Code window (`Developer: Reload Window`)
+
+### AI Generation Failing
+1. Verify AI is enabled: `csharpApiTester.ai.enabled`
+2. Check API key is correctly configured
+3. Test configuration with a simple endpoint first
+4. Check console output for detailed error messages
+
+### Environment Not Switching
+1. Click the environment indicator in status bar
+2. Select desired environment from the list
+3. Verify environment settings in workspace settings
 
 ## 🤝 Contributing
 
@@ -302,9 +367,27 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- Built with VS Code Extension API
-- Powered by TypeScript and Axios
+- Built with [VS Code Extension API](https://code.visualstudio.com/api)
+- HTTP client powered by [Axios](https://axios-http.com/)
+- UI inspired by [Apifox](https://apifox.com/)
+- AI integration with OpenAI and compatible providers
+
+## 📊 Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for version history and updates.
+
+## 🔗 Links
+
+- [GitHub Repository](https://github.com/javaer996/csharp-api-tester)
+- [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=javaer996.csharp-api-tester)
+- [Report Issues](https://github.com/javaer996/csharp-api-tester/issues)
+- [Feature Requests](https://github.com/javaer996/csharp-api-tester/issues/new?labels=enhancement)
 
 ---
 
 **Enjoy testing your C# APIs! 🚀**
+
+If you find this extension helpful, please consider:
+- ⭐ Starring the [GitHub repository](https://github.com/javaer996/csharp-api-tester)
+- 📝 Leaving a review on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=javaer996.csharp-api-tester)
+- 🐛 Reporting issues or suggesting features
