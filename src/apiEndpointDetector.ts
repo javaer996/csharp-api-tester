@@ -173,10 +173,10 @@ export class ApiEndpointDetector {
                 methodSignature = line;
 
                 // Extract method name and return type
-                const methodMatch = line.match(/public\s+(?:async\s+)?(\w+[\w<>?]*)\s+(\w+)\s*\(/);
-                if (methodMatch) {
-                    returnType = methodMatch[1];
-                    methodName = methodMatch[2];
+                const methodDetails = this.extractMethodDetails(methodSignature);
+                if (methodDetails) {
+                    returnType = methodDetails.returnType;
+                    methodName = methodDetails.methodName;
                 }
                 break;
             } else if (line.includes('public') && !line.includes('class')) {
@@ -193,10 +193,10 @@ export class ApiEndpointDetector {
                     methodSignature += ' ' + lines[currentLine].trim();
                 }
 
-                const methodMatch = methodSignature.match(/public\s+(?:async\s+)?(\w+[\w<>?]*)\s+(\w+)\s*\(/);
-                if (methodMatch) {
-                    returnType = methodMatch[1];
-                    methodName = methodMatch[2];
+                const methodDetails = this.extractMethodDetails(methodSignature);
+                if (methodDetails) {
+                    returnType = methodDetails.returnType;
+                    methodName = methodDetails.methodName;
                 }
                 break;
             }
@@ -245,6 +245,43 @@ export class ApiEndpointDetector {
             character: 0,
             methodName: methodName,
             controllerName: controllerInfo.name
+        };
+    }
+
+    private extractMethodDetails(methodSignature: string): { returnType: string; methodName: string } | null {
+        if (!methodSignature) {
+            return null;
+        }
+
+        const signatureBeforeParen = methodSignature.split('(')[0];
+        const trimmedSignature = signatureBeforeParen.trim();
+
+        if (!trimmedSignature) {
+            return null;
+        }
+
+        const methodNameMatch = trimmedSignature.match(/(\w+)(?:<[^<>]*>)?\s*$/);
+        if (!methodNameMatch) {
+            return null;
+        }
+
+        const methodNameWithGenerics = methodNameMatch[0].trim();
+        const methodName = methodNameMatch[1];
+
+        let returnType = trimmedSignature.substring(0, trimmedSignature.length - methodNameWithGenerics.length).trim();
+
+        const modifierPattern = /^(?:public|private|protected|internal|static|virtual|override|abstract|partial|async|sealed|unsafe|extern|new)\s+/i;
+        while (modifierPattern.test(returnType)) {
+            returnType = returnType.replace(modifierPattern, '').trimStart();
+        }
+
+        if (!returnType) {
+            returnType = 'unknown';
+        }
+
+        return {
+            returnType,
+            methodName
         };
     }
 
