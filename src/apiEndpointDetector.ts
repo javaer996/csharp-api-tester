@@ -208,10 +208,7 @@ export class ApiEndpointDetector {
             return null;
         }
 
-        // Parse parameters
-        const parameters = await this.parseParameters(document, methodSignature);
-
-        // Build complete route
+        // Build complete route first (needed for debugging context)
         let route = '';
 
         // Start with controller route if available
@@ -233,6 +230,9 @@ export class ApiEndpointDetector {
             route += `/${methodName}`;
         }
 
+        // Parse parameters with context
+        const parameters = await this.parseParameters(document, methodSignature, methodName, route);
+
         // Handle route parameter placeholders
         route = this.processRouteParameters(route, parameters);
 
@@ -248,25 +248,37 @@ export class ApiEndpointDetector {
         };
     }
 
-    private async parseParameters(document: vscode.TextDocument, methodSignature: string): Promise<ApiParameter[]> {
+    private async parseParameters(document: vscode.TextDocument, methodSignature: string, methodName?: string, route?: string): Promise<ApiParameter[]> {
         const parameters: ApiParameter[] = [];
+
+        console.log(`[C# API Detector] 🎯 Parsing parameters for method: ${methodName || 'unknown'}, route: ${route || 'unknown'}`);
+        console.log(`[C# API Detector] 📝 Method signature: ${methodSignature}`);
 
         // Extract parameter list
         const paramMatch = methodSignature.match(/\(([^)]+)\)/);
         if (!paramMatch) {
+            console.log(`[C# API Detector] ⚠️ No parameters found in method signature`);
             return parameters;
         }
 
         const paramString = paramMatch[1];
         const paramList = this.splitParameters(paramString);
 
-        for (const param of paramList) {
-            const paramInfo = await this.parseSingleParameter(document, param.trim());
+        console.log(`[C# API Detector] 📋 Found ${paramList.length} parameters: [${paramList.join(', ')}]`);
+
+        for (let i = 0; i < paramList.length; i++) {
+            const param = paramList[i];
+            console.log(`[C# API Detector] 🔄 Processing parameter ${i + 1}/${paramList.length}: "${param.trim()}"`);
+            const paramInfo = await this.parseSingleParameter(document, param.trim(), methodName, route);
             if (paramInfo) {
                 parameters.push(paramInfo);
+                console.log(`[C# API Detector]   ✅ Added parameter: ${paramInfo.name} (${paramInfo.type})`);
+            } else {
+                console.log(`[C# API Detector]   ❌ Failed to parse parameter: "${param.trim()}"`);
             }
         }
 
+        console.log(`[C# API Detector] ✅ Completed parsing ${parameters.length} parameters for ${methodName}`);
         return parameters;
     }
 
@@ -319,8 +331,8 @@ export class ApiEndpointDetector {
         return parameters;
     }
 
-    private async parseSingleParameter(document: vscode.TextDocument, param: string): Promise<ApiParameter | null> {
-        console.log(`[C# API Detector] 🔍 Parsing parameter: "${param}"`);
+    private async parseSingleParameter(document: vscode.TextDocument, param: string, methodName?: string, route?: string): Promise<ApiParameter | null> {
+        console.log(`[C# API Detector] 🔍 Parsing parameter: "${param}" (method: ${methodName || 'unknown'}, route: ${route || 'unknown'})`);
 
         // Parse parameter with potential attributes
         let type = '';

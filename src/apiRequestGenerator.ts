@@ -191,7 +191,8 @@ export class ApiRequestGenerator {
         if (bodyParams.length === 1) {
             // Single body parameter - use class properties if available
             const bodyParam = bodyParams[0];
-            if (bodyParam.properties && bodyParam.properties.length > 0) {
+            console.log(`[ApiRequestGenerator] Processing body parameter: ${bodyParam.type}, properties:`, bodyParam.properties);
+        if (bodyParam.properties && bodyParam.properties.length > 0) {
                 // Check if this is an enum marker
                 if (bodyParam.properties[0].name === '_enum' && bodyParam.properties[0]._baseClassWarning?.startsWith('ENUM_INFO:')) {
                     const enumData = bodyParam.properties[0]._baseClassWarning.substring('ENUM_INFO:'.length);
@@ -219,8 +220,9 @@ export class ApiRequestGenerator {
                 // ⭐ NEW: 如果没有解析到 properties,先尝试从缓存读取错误
                 if (this.classParser) {
                     const cachedErrors = this.classParser.getCachedErrors(bodyParam.type);
+                    console.log(`[ApiRequestGenerator] Cached errors for ${bodyParam.type}:`, cachedErrors);
                     if (cachedErrors && cachedErrors.length > 0) {
-                        console.log(`[ApiRequestGenerator] Using cached errors for ${bodyParam.type}`);
+                        console.log(`[ApiRequestGenerator] Using cached errors for ${bodyParam.type}:`, cachedErrors);
                         // 将缓存的错误转换为我们的错误格式
                         const formattedErrors = cachedErrors.map(err => {
                             if (err.includes('未在工作区找到')) {
@@ -230,7 +232,11 @@ export class ApiRequestGenerator {
                         });
                         errors.push(...formattedErrors);
                         return { body: null, errors };
+                    } else {
+                        console.log(`[ApiRequestGenerator] No cached errors found for ${bodyParam.type}, generating default warning`);
                     }
+                } else {
+                    console.log(`[ApiRequestGenerator] No classParser available for ${bodyParam.type}`);
                 }
 
                 // 如果没有缓存的错误

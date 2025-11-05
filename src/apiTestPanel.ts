@@ -451,15 +451,32 @@ export class ApiTestPanel {
         // Check if parsing was successful (any parameter has valid properties)
         let hasValidProperties = false;
         let failedClasses: string[] = [];
+        let undefinedClasses: string[] = [];
         for (const param of this._currentEndpoint.parameters) {
             if ((param.source === 'body' || param.source === 'form')) {
+                console.log(`[ApiTestPanel] 🔍 Checking parameter ${param.type}: properties =`, param.properties);
                 if (param.properties && param.properties.length > 0) {
                     hasValidProperties = true;
+                    console.log(`[ApiTestPanel] ✅ Parameter ${param.type} has ${param.properties.length} properties`);
+                } else if (param.properties === undefined) {
+                    // 参数未解析（properties 为 undefined）
+                    undefinedClasses.push(param.type);
+                    console.log(`[ApiTestPanel] ⚠️ Parameter ${param.type} not parsed (properties undefined)`);
                 } else {
-                    // 记录失败的类
+                    // 参数解析失败（properties 为空数组）
                     failedClasses.push(param.type);
+                    console.log(`[ApiTestPanel] ❌ Parameter ${param.type} parsed but failed (empty properties)`);
                 }
             }
+        }
+
+        // ⭐ NEW: 对于未解析的参数，强制生成警告
+        if (undefinedClasses.length > 0) {
+            console.warn(`[ApiTestPanel] ⚠️ Found ${undefinedClasses.length} unparsed parameters: [${undefinedClasses.join(', ')}]`);
+            // 在控制台输出详细警告
+            undefinedClasses.forEach(className => {
+                console.warn(`[ApiTestPanel]   - ${className}: properties undefined, parsing may have failed or not started`);
+            });
         }
 
         // Regenerate request body with parsed properties
@@ -489,10 +506,17 @@ export class ApiTestPanel {
                 updatedRequest.errors!.forEach(err => console.warn(`  - ${err}`));
             }
 
-            // Send completion message to webview
-            const completionMessage = hasValidProperties
-                ? '参数解析完成!'
-                : '参数解析完成(部分属性可能需要手动填写)';
+            // Send completion message to webview with more detailed information
+            let completionMessage = '参数解析完成!';
+            if (undefinedClasses.length > 0) {
+                completionMessage = `⚠️ 参数解析完成，但发现 ${undefinedClasses.length} 个未解析的参数: ${undefinedClasses.join(', ')}`;
+            } else if (failedClasses.length > 0) {
+                completionMessage = `⚠️ 参数解析完成，但 ${failedClasses.length} 个参数解析失败: ${failedClasses.join(', ')}`;
+            } else if (!hasValidProperties) {
+                completionMessage = '⚠️ 参数解析完成，但没有找到有效的属性定义，请手动填写请求体';
+            }
+
+            console.log(`[ApiTestPanel] 📢 Completion message: ${completionMessage}`);
             this._panel.webview.postMessage({
                 type: 'parsingComplete',
                 message: completionMessage

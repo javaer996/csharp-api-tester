@@ -57,21 +57,57 @@ export class CSharpClassParser {
      * @returns Set of type names found in the document
      */
     private extractAllClassNamesFromDocument(document: vscode.TextDocument): Set<string> {
-        const text = document.getText();
+        const lines = this.getDocumentLines(document);
         const typeNames = new Set<string>();
 
-        // Match all class definitions: public class ClassName, class ClassName : BaseClass, etc.
-        const classRegex = /\bclass\s+(\w+)/g;
-        let match;
+        let braceCount = 0;
+        let inClass = false;
+        let currentOuterClass = '';
 
-        while ((match = classRegex.exec(text)) !== null) {
-            typeNames.add(match[1]);
-        }
+        // Scan line by line to properly handle nested classes
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
 
-        // Match all enum definitions: public enum EnumName, enum EnumName, etc.
-        const enumRegex = /\benum\s+(\w+)/g;
-        while ((match = enumRegex.exec(text)) !== null) {
-            typeNames.add(match[1]);
+            // Match class definitions: public class ClassName, class ClassName : BaseClass, etc.
+            const classMatch = line.match(/\bclass\s+(\w+)/);
+            if (classMatch) {
+                const className = classMatch[1];
+
+                if (braceCount > 0 && currentOuterClass) {
+                    // This is a nested class
+                    const nestedClassName = `${currentOuterClass}.${className}`;
+                    typeNames.add(nestedClassName);
+                    console.log(`[CSharpClassParser] 📄 Found nested class: ${nestedClassName}`);
+                } else {
+                    // This is a top-level class
+                    typeNames.add(className);
+                    currentOuterClass = className;
+                    inClass = true;
+                    console.log(`[CSharpClassParser] 📄 Found top-level class: ${className}`);
+                }
+            }
+
+            // Track braces to identify class scope (check after class definition)
+            for (const char of line) {
+                if (char === '{') {
+                    braceCount++;
+                }
+                if (char === '}') {
+                    braceCount--;
+                    if (braceCount === 0) {
+                        inClass = false;
+                        currentOuterClass = '';
+                    }
+                }
+            }
+
+            // Match all enum definitions: public enum EnumName, enum EnumName, etc.
+            const enumMatch = line.match(/\benum\s+(\w+)/);
+            if (enumMatch) {
+                const enumName = enumMatch[1];
+                typeNames.add(enumName);
+                console.log(`[CSharpClassParser] 📄 Found enum: ${enumName}`);
+            }
         }
 
         console.log(`[CSharpClassParser] 📄 Extracted ${typeNames.size} type names from ${document.uri.fsPath}: [${Array.from(typeNames).join(', ')}]`);
@@ -88,6 +124,19 @@ export class CSharpClassParser {
             if (classNames.has(className)) {
                 console.log(`[CSharpClassParser] 🎯 File cache hit! ${className} found in ${filePath}`);
                 return filePath;
+            }
+
+            // ⭐ NESTED CLASS SUPPORT: For nested classes, also check if this file contains the outer class
+            if (className.includes('.')) {
+                const parts = className.split('.');
+                if (parts.length === 2) {
+                    const [outerClass, innerClass] = parts;
+                    // Check if this file contains both the outer and inner classes
+                    if (classNames.has(outerClass) && classNames.has(innerClass)) {
+                        console.log(`[CSharpClassParser] 🎯 File cache hit! Nested class ${className} found in ${filePath} (contains both ${outerClass} and ${innerClass})`);
+                        return filePath;
+                    }
+                }
             }
         }
         return null;
@@ -267,6 +316,24 @@ export class CSharpClassParser {
     }
 
     /**
+     * Ensure the file-level class cache is populated for a document
+     * @param document Document whose classes should be cached
+     * @returns Set of class names discovered in the document
+     */
+    private ensureDocumentClassCache(document: vscode.TextDocument): Set<string> {
+        const filePath = document.uri.fsPath;
+
+        if (this.fileClassCache.has(filePath)) {
+            return this.fileClassCache.get(filePath)!;
+        }
+
+        const allClassNames = this.extractAllClassNamesFromDocument(document);
+        this.fileClassCache.set(filePath, allClassNames);
+        console.log(`[CSharpClassParser] 💾 Populated class cache for ${filePath} with ${allClassNames.size} entries`);
+        return allClassNames;
+    }
+
+    /**
      * Get search file limit based on configured strategy and pattern type
      * @param pattern The search pattern to get limit for
      * @param patternType The type of pattern (direct, using_precise, using_fuzzy, global)
@@ -330,46 +397,91 @@ export class CSharpClassParser {
      */
     private generateSearchPatterns(className: string, usingStatements: string[]): Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global'}> {
         const patterns: Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global'}> = [];
+        const addedPatterns = new Set<string>();
+
+        const addPattern = (pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global') => {
+            if (addedPatterns.has(pattern)) {
+                return;
+            }
+            addedPatterns.add(pattern);
+            patterns.push({pattern, type});
+        };
+
+        const isNestedClass = className.includes('.');
+        const classParts = className.split('.');
+        const outerClassName = classParts[0];
+        const innerClassName = classParts[classParts.length - 1];
+
+        // Candidate file names to try (prioritized): outer class, inner class, full name
+        const candidateNames: string[] = [];
+        if (isNestedClass) {
+            candidateNames.push(outerClassName);
+
+            // Include intermediate prefixes for multi-level nesting (e.g., Outer.Inner => Outer.Inner)
+            if (classParts.length > 2) {
+                for (let i = 1; i < classParts.length - 1; i++) {
+                    candidateNames.push(classParts.slice(0, i + 1).join('.'));
+                }
+            }
+
+            if (innerClassName !== outerClassName) {
+                candidateNames.push(innerClassName);
+            }
+
+            candidateNames.push(className);
+        } else {
+            candidateNames.push(className);
+        }
 
         // Pattern 1: Direct class file name match (most common)
-        patterns.push({pattern: `**/${className}.cs`, type: 'direct'});
+        for (const candidate of candidateNames) {
+            addPattern(`**/${candidate}.cs`, 'direct');
+
+            // For nested names containing dots, also try replacing dots with path separators
+            if (candidate.includes('.')) {
+                addPattern(`**/${candidate.replace(/\./g, '/')}.cs`, 'direct');
+            }
+        }
 
         // Pattern 2: Based on using statements, generate namespace-based paths
         for (const namespace of usingStatements) {
-            // Convert namespace to path: Fy.Hospital.Mobile.Model.VM -> **/Fy.Hospital.Mobile.Model/VM/**/${className}.cs
             const pathParts = namespace.split('.');
+            const namespacePath = pathParts.join('/');
 
-            // Try full namespace path (most precise)
-            patterns.push({pattern: `**/${pathParts.join('/')}/**/${className}.cs`, type: 'using_precise'});
+            for (const candidate of candidateNames) {
+                addPattern(`**/${namespacePath}/**/${candidate}.cs`, 'using_precise');
 
-            // Try last 2 segments (e.g., Model/VM) - fuzzy
-            if (pathParts.length >= 2) {
-                const lastTwo = pathParts.slice(-2).join('/');
-                patterns.push({pattern: `**/${lastTwo}/**/${className}.cs`, type: 'using_fuzzy'});
+                if (candidate.includes('.')) {
+                    addPattern(`**/${namespacePath}/**/${candidate.replace(/\./g, '/')}.cs`, 'using_precise');
+                }
             }
 
-            // Try last segment (e.g., VM) - more fuzzy
+            if (pathParts.length >= 2) {
+                const lastTwo = pathParts.slice(-2).join('/');
+                for (const candidate of candidateNames) {
+                    addPattern(`**/${lastTwo}/**/${candidate}.cs`, 'using_fuzzy');
+                    if (candidate.includes('.')) {
+                        addPattern(`**/${lastTwo}/**/${candidate.replace(/\./g, '/')}.cs`, 'using_fuzzy');
+                    }
+                }
+            }
+
             if (pathParts.length >= 1) {
                 const lastOne = pathParts[pathParts.length - 1];
-                patterns.push({pattern: `**/${lastOne}/**/${className}.cs`, type: 'using_fuzzy'});
+                for (const candidate of candidateNames) {
+                    addPattern(`**/${lastOne}/**/${candidate}.cs`, 'using_fuzzy');
+                    if (candidate.includes('.')) {
+                        addPattern(`**/${lastOne}/**/${candidate.replace(/\./g, '/')}.cs`, 'using_fuzzy');
+                    }
+                }
             }
         }
 
         // Pattern 3: Global C# file search - search all .cs files as a fallback (LAST RESORT)
-        patterns.push({pattern: `**/*.cs`, type: 'global'});
+        addPattern(`**/*.cs`, 'global');
 
-        // Remove duplicates while preserving type information
-        const seen = new Set<string>();
-        const uniquePatterns = patterns.filter(p => {
-            if (seen.has(p.pattern)) {
-                return false;
-            }
-            seen.add(p.pattern);
-            return true;
-        });
-
-        console.log(`[CSharpClassParser] 🔍 Generated ${uniquePatterns.length} search patterns for ${className}`);
-        return uniquePatterns;
+        console.log(`[CSharpClassParser] 🔍 Generated ${patterns.length} search patterns for ${className}`);
+        return patterns;
     }
 
     /**
@@ -446,9 +558,25 @@ export class CSharpClassParser {
                         const text = document.getText();
 
                         // Quick check: does this file contain the class or enum definition?
-                        const classRegex = new RegExp(`\\bclass\\s+${className}\\b`);
+                        // ⭐ NESTED CLASS SUPPORT: Check for both regular and nested class patterns
+                        const classRegex = new RegExp(`\\bclass\\s+${className.replace('.', '\\.')}\\b`);
                         const enumRegex = new RegExp(`\\benum\\s+${className}\\b`);
-                        if (classRegex.test(text) || enumRegex.test(text)) {
+
+                        // For nested classes, also check if the file contains the nested class pattern
+                        let containsClass = classRegex.test(text) || enumRegex.test(text);
+
+                        if (!containsClass && className.includes('.')) {
+                            // For nested classes like "HealthNews.MediaInfo", check if the file contains both classes
+                            const parts = className.split('.');
+                            if (parts.length === 2) {
+                                const [outerClass, innerClass] = parts;
+                                const outerRegex = new RegExp(`\\bclass\\s+${outerClass}\\b`);
+                                const innerRegex = new RegExp(`\\bclass\\s+${innerClass}\\b`);
+                                containsClass = outerRegex.test(text) && innerRegex.test(text);
+                            }
+                        }
+
+                        if (containsClass) {
                             console.log(`[CSharpClassParser]     ✅ Found ${className} in ${fileUri.fsPath} (checked ${checkedCount}/${files.length} files)`);
 
                             // ⭐ KEY OPTIMIZATION: Extract and cache all class names from this file
@@ -569,7 +697,7 @@ export class CSharpClassParser {
                 // Recursively parse nested complex types if enabled
                 if (recursive) {
                     console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
-                    await this.parseNestedComplexTypes(properties, currentDocument, parsedClasses, depth + 1, lastFoundDocument, currentClassDocument);
+                    await this.parseNestedComplexTypes(properties, currentDocument, parsedClasses, depth + 1, lastFoundDocument, currentClassDocument, actualClassName);
                 }
                 return properties;
             }
@@ -586,7 +714,7 @@ export class CSharpClassParser {
                 // Recursively parse nested complex types if enabled
                 if (recursive) {
                     console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
-                    await this.parseNestedComplexTypes(properties, lastFoundDocument, parsedClasses, depth + 1, lastFoundDocument, lastFoundDocument);
+                    await this.parseNestedComplexTypes(properties, lastFoundDocument, parsedClasses, depth + 1, lastFoundDocument, lastFoundDocument, actualClassName);
                 }
                 return properties;
             }
@@ -602,7 +730,7 @@ export class CSharpClassParser {
                 // Recursively parse nested complex types if enabled
                 if (recursive) {
                     console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
-                    await this.parseNestedComplexTypes(properties, currentDocument, parsedClasses, depth + 1, currentDocument, currentDocument);
+                    await this.parseNestedComplexTypes(properties, currentDocument, parsedClasses, depth + 1, currentDocument, currentDocument, actualClassName);
                 }
                 return properties;
             }
@@ -620,7 +748,7 @@ export class CSharpClassParser {
                 // Recursively parse nested complex types if enabled, passing foundDocument as hint
                 if (recursive) {
                     console.log(`[CSharpClassParser] 🔄 Starting recursive parsing for ${actualClassName}`);
-                    await this.parseNestedComplexTypes(properties, foundDocument, parsedClasses, depth + 1, foundDocument, foundDocument);
+                    await this.parseNestedComplexTypes(properties, foundDocument, parsedClasses, depth + 1, foundDocument, foundDocument, actualClassName);
                 }
 
                 return properties;
@@ -629,18 +757,96 @@ export class CSharpClassParser {
 
         console.log(`[CSharpClassParser] ❌ Class ${actualClassName} not found via using-based search`);
 
-        // ⭐ NEW: Cache the failure with error message to avoid repeated searching
-        const errorMsg = `⚠️ 警告: 类 '${actualClassName}' 未在工作区找到`;
-        console.log(`[CSharpClassParser] 💾 Caching parse failure for ${actualClassName} with error message`);
+        // ⭐ ENHANCED ERROR HANDLING: Provide more specific error messages for nested classes
+        let errorMsg = `⚠️ 警告: 类 '${actualClassName}' 未在工作区找到`;
+        if (actualClassName.includes('.')) {
+            const parts = actualClassName.split('.');
+            if (parts.length === 2) {
+                errorMsg = `⚠️ 警告: 嵌套类 '${actualClassName}' 未在工作区找到。请确保文件中同时定义了外部类 '${parts[0]}' 和内部类 '${parts[1]}'`;
+            } else {
+                errorMsg = `⚠️ 警告: 复杂嵌套类 '${actualClassName}' 格式不支持。当前仅支持 'OuterClass.InnerClass' 格式`;
+            }
+        }
+
+        console.log(`[CSharpClassParser] 💾 Caching parse failure for ${actualClassName} with enhanced error message`);
         this.cache.set(
             actualClassName,
             [], // Empty properties
             null, // No class definition
             currentDocument.uri.fsPath,
-            [errorMsg] // Error message
+            [errorMsg] // Enhanced error message
         );
 
         return null;
+    }
+
+    /**
+     * Resolve a property base type to a fully-qualified nested class name when necessary
+     * @param baseType The extracted base type from the property (e.g., MediaInfo)
+     * @param parentClassName Name of the parent class currently being parsed
+     * @param candidateDocuments Documents likely containing the nested class (current, lastFound, etc.)
+     * @returns Resolved type name (possibly qualified with outer class)
+     */
+    private resolveNestedClassName(
+        baseType: string,
+        parentClassName: string | undefined,
+        candidateDocuments: vscode.TextDocument[]
+    ): string {
+        // If already fully-qualified or clearly namespaced, return as-is
+        if (baseType.includes('.')) {
+            return baseType;
+        }
+
+        // Prepare candidate document caches (deduplicated by path)
+        const uniqueDocsMap = new Map<string, vscode.TextDocument>();
+        for (const doc of candidateDocuments) {
+            uniqueDocsMap.set(doc.uri.fsPath, doc);
+        }
+        const uniqueDocs = Array.from(uniqueDocsMap.values());
+
+        // Collect class name sets for each candidate document
+        const classSets = uniqueDocs.map(doc => this.ensureDocumentClassCache(doc));
+
+        // If the base type exists as a top-level class, keep it unqualified
+        for (const classSet of classSets) {
+            if (classSet.has(baseType)) {
+                return baseType;
+            }
+        }
+
+        if (parentClassName) {
+            const hierarchyParts = parentClassName.split('.');
+
+            // Try most specific outer class first (e.g., Outer.Inner -> [Outer.Inner, Outer])
+            for (let i = hierarchyParts.length; i >= 1; i--) {
+                const outerPrefix = hierarchyParts.slice(0, i).join('.');
+                const candidateName = `${outerPrefix}.${baseType}`;
+
+                for (const classSet of classSets) {
+                    if (classSet.has(candidateName)) {
+                        console.log(`[CSharpClassParser] 🧭 Resolved nested type ${baseType} -> ${candidateName}`);
+                        return candidateName;
+                    }
+                }
+
+                // Fallback: search global cache if we previously scanned other files
+                for (const [filePath, classNames] of this.fileClassCache.entries()) {
+                    if (classNames.has(candidateName)) {
+                        console.log(`[CSharpClassParser] 🧭 Resolved nested type ${baseType} -> ${candidateName} via cached file ${filePath}`);
+                        return candidateName;
+                    }
+                }
+            }
+        }
+
+        // Final fallback: if base type exists in any cached file as top-level, keep original name
+        for (const classNames of this.fileClassCache.values()) {
+            if (classNames.has(baseType)) {
+                return baseType;
+            }
+        }
+
+        return baseType;
     }
 
     /**
@@ -651,6 +857,7 @@ export class CSharpClassParser {
      * @param depth Current recursion depth
      * @param lastFoundDocument Document where the parent class was found (for same-file inference)
      * @param currentClassDocument Document where the current class is defined (for same-file dependency lookup)
+     * @param parentClassName Name of the class currently being parsed (used for resolving nested types)
      */
     private async parseNestedComplexTypes(
         properties: ClassProperty[],
@@ -658,10 +865,30 @@ export class CSharpClassParser {
         parsedClasses: Set<string>,
         depth: number,
         lastFoundDocument?: vscode.TextDocument,
-        currentClassDocument?: vscode.TextDocument
+        currentClassDocument?: vscode.TextDocument,
+        parentClassName?: string
     ): Promise<void> {
         console.log(`[CSharpClassParser] 🔍 parseNestedComplexTypes called with ${properties.length} properties at depth ${depth}`);
         console.log(`[CSharpClassParser] 📋 parsedClasses contains: [${Array.from(parsedClasses).join(', ')}]`);
+        console.log(`[CSharpClassParser] 📁 currentDocument: ${currentDocument.uri.fsPath}`);
+        console.log(`[CSharpClassParser] 📁 lastFoundDocument: ${lastFoundDocument?.uri.fsPath || 'undefined'}`);
+        console.log(`[CSharpClassParser] 📁 currentClassDocument: ${currentClassDocument?.uri.fsPath || 'undefined'}`);
+
+        // Determine candidate documents for resolving nested types (deduplicated in order of relevance)
+        const candidateDocuments: vscode.TextDocument[] = [];
+        const addCandidateDocument = (doc?: vscode.TextDocument) => {
+            if (!doc) {
+                return;
+            }
+            if (candidateDocuments.some(existing => existing.uri.fsPath === doc.uri.fsPath)) {
+                return;
+            }
+            candidateDocuments.push(doc);
+        };
+
+        addCandidateDocument(currentClassDocument);
+        addCandidateDocument(lastFoundDocument);
+        addCandidateDocument(currentDocument);
 
         // Build a map to store parsed results for reuse
         const parsedResults = new Map<string, ClassProperty[]>();
@@ -671,9 +898,20 @@ export class CSharpClassParser {
 
         for (const prop of properties) {
             // Extract the actual type (handle List<T>, IEnumerable<T>, T[], T?, etc.)
-            const baseType = this.extractBaseType(prop.type);
+            const originalBaseType = this.extractBaseType(prop.type);
 
-            console.log(`[CSharpClassParser]   - Property ${prop.name} (type: ${prop.type}, baseType: ${baseType})`);
+            // Resolve potential nested class references when no namespace was specified
+            const baseType = this.resolveNestedClassName(
+                originalBaseType,
+                parentClassName,
+                candidateDocuments
+            );
+
+            if (baseType !== originalBaseType) {
+                console.log(`[CSharpClassParser]   - Property ${prop.name} (type: ${prop.type}) resolved nested base type: ${originalBaseType} -> ${baseType}`);
+            } else {
+                console.log(`[CSharpClassParser]   - Property ${prop.name} (type: ${prop.type}, baseType: ${baseType})`);
+            }
 
             // Skip if it's a simple type
             if (this.isSimpleType(baseType)) {
@@ -752,8 +990,10 @@ export class CSharpClassParser {
                 if (nestedProperties && nestedProperties.length > 0) {
                     parsedResults.set(baseType, nestedProperties);
                     console.log(`[CSharpClassParser]     ✅ Parsed ${baseType} with ${nestedProperties.length} properties`);
+                    console.log(`[CSharpClassParser]        Properties: [${nestedProperties.map(p => p.name).join(', ')}]`);
                 } else {
                     console.log(`[CSharpClassParser]     ⚠️ WARNING: No nested properties found for ${baseType}!`);
+                    console.log(`[CSharpClassParser]        nestedProperties is:`, nestedProperties);
                 }
             }
 
@@ -762,6 +1002,9 @@ export class CSharpClassParser {
                 if (parsedResults.has(baseType)) {
                     prop.properties = parsedResults.get(baseType)!;
                     console.log(`[CSharpClassParser]     ✅ Attached ${prop.properties.length} nested properties to ${prop.name}`);
+                } else {
+                    console.log(`[CSharpClassParser]     ❌ Failed to attach properties to ${prop.name} (baseType: ${baseType})`);
+                    console.log(`[CSharpClassParser]        Available types in parsedResults: [${Array.from(parsedResults.keys()).join(', ')}]`);
                 }
             }
         }
@@ -771,6 +1014,7 @@ export class CSharpClassParser {
 
     /**
      * Extract base type from complex types (List<T>, T[], T?, etc.)
+     * Also handles nested class types like OuterClass.InnerClass
      */
     private extractBaseType(type: string): string {
         // Remove nullable marker
@@ -781,7 +1025,7 @@ export class CSharpClassParser {
             return baseType.slice(0, -2);
         }
 
-        // Handle generic types: List<User>, IEnumerable<Product>, etc.
+        // Handle generic types: List<User>, IEnumerable<Product>, List<OuterClass.InnerClass>, etc.
         const genericMatch = baseType.match(/<(.+)>/);
         if (genericMatch) {
             return genericMatch[1].trim();
@@ -791,6 +1035,11 @@ export class CSharpClassParser {
     }
 
     private findClassDefinition(lines: string[], className: string): number {
+        // ⭐ NESTED CLASS SUPPORT: Check if this is a nested class (OuterClass.InnerClass)
+        if (className.includes('.')) {
+            return this.findNestedClassDefinition(lines, className);
+        }
+
         // ⭐ PERFORMANCE: Create regex once, not in every loop iteration
         const classRegex = new RegExp(`\\bclass\\s+${className}\\b`);
 
@@ -802,6 +1051,67 @@ export class CSharpClassParser {
                 return i;
             }
         }
+        return -1;
+    }
+
+    /**
+     * Find nested class definition (OuterClass.InnerClass)
+     * @param lines Array of lines to search
+     * @param nestedClassName The nested class name in format "OuterClass.InnerClass"
+     * @returns Line index where nested class is found, or -1 if not found
+     */
+    private findNestedClassDefinition(lines: string[], nestedClassName: string): number {
+        const parts = nestedClassName.split('.');
+        if (parts.length !== 2) {
+            console.log(`[CSharpClassParser] ⚠️ Unsupported nested class format: ${nestedClassName} (expected: OuterClass.InnerClass)`);
+            return -1;
+        }
+
+        const [outerClassName, innerClassName] = parts;
+        console.log(`[CSharpClassParser] 🔍 Searching for nested class: ${innerClassName} inside ${outerClassName}`);
+
+        let outerClassLineIndex = -1;
+        let braceCount = 0;
+        let inOuterClass = false;
+
+        // First, find the outer class
+        const outerClassRegex = new RegExp(`\\bclass\\s+${outerClassName}\\b`);
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+
+            if (!inOuterClass) {
+                // Look for outer class definition
+                if (outerClassRegex.test(line)) {
+                    outerClassLineIndex = i;
+                    console.log(`[CSharpClassParser] ✅ Found outer class ${outerClassName} at line ${i}`);
+                    inOuterClass = true;
+                }
+            } else {
+                // We're inside the outer class, track braces
+                for (const char of line) {
+                    if (char === '{') {
+                        braceCount++;
+                    }
+                    if (char === '}') {
+                        braceCount--;
+                    }
+                }
+
+                // Look for inner class definition within the outer class
+                const innerClassRegex = new RegExp(`\\bclass\\s+${innerClassName}\\b`);
+                if (innerClassRegex.test(line)) {
+                    console.log(`[CSharpClassParser] ✅ Found inner class ${innerClassName} at line ${i} inside ${outerClassName}`);
+                    return i;
+                }
+
+                // If we've exited the outer class, stop searching
+                if (braceCount === 0) {
+                    console.log(`[CSharpClassParser] ❌ Inner class ${innerClassName} not found within ${outerClassName}`);
+                    return -1;
+                }
+            }
+        }
+
         return -1;
     }
 
@@ -1076,7 +1386,7 @@ export class CSharpClassParser {
      */
     private parseSingleLineProperty(line: string): ClassProperty | null {
         // Pattern: public Type Name { get; set; } [= value;]
-        const propertyRegex = /^\s*(?:public|private|protected|internal)?\s+([\w<>?,\[\]\s]+?)\s+(\w+)\s*\{\s*get;?\s*set;?\s*\}(?:\s*=\s*[^;]+)?;?$/i;
+        const propertyRegex = /^\s*(?:public|private|protected|internal)?\s+([\w<>\?\.,\[\]\s]+?)\s+(\w+)\s*\{\s*get;?\s*set;?\s*\}(?:\s*=\s*[^;]+)?;?$/i;
         const match = line.match(propertyRegex);
 
         if (!match) {
@@ -1103,7 +1413,7 @@ export class CSharpClassParser {
     private parsePropertyDeclaration(line: string): { type: string; name: string } | null {
         // Pattern: public Type PropertyName [{ or nothing]
         // Must have public/private/protected/internal, type, and name
-        const declRegex = /^\s*(?:public|private|protected|internal)\s+([\w<>?,\[\]\s]+?)\s+(\w+)\s*(?:\{)?$/i;
+        const declRegex = /^\s*(?:public|private|protected|internal)\s+([\w<>\?\.,\[\]\s]+?)\s+(\w+)\s*(?:\{)?$/i;
         const match = line.match(declRegex);
 
         if (!match) {
