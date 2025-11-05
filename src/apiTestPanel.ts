@@ -87,6 +87,8 @@ export class ApiTestPanel {
             }
         );
 
+        panel.iconPath = vscode.Uri.joinPath(extensionUri, 'media', 'rocket.svg');
+
         const apiTestPanel = new ApiTestPanel(panel, extensionUri, endpoint, panelKey, detector);
         ApiTestPanel.panels.set(panelKey, apiTestPanel);
     }
