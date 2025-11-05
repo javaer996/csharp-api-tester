@@ -1963,22 +1963,22 @@ export class ApiTestPanel {
         /* Notification Animations */
         @keyframes slideIn {
             from {
-                transform: translateX(100%);
+                transform: translate(-50%, -50%) scale(0.9);
                 opacity: 0;
             }
             to {
-                transform: translateX(0);
+                transform: translate(-50%, -50%) scale(1);
                 opacity: 1;
             }
         }
 
         @keyframes slideOut {
             from {
-                transform: translateX(0);
+                transform: translate(-50%, -50%) scale(1);
                 opacity: 1;
             }
             to {
-                transform: translateX(100%);
+                transform: translate(-50%, -50%) scale(0.88);
                 opacity: 0;
             }
         }
@@ -3054,31 +3054,34 @@ export class ApiTestPanel {
         // Show notification
         function showNotification(message, type) {
             const notification = document.createElement('div');
-            let bgColor = '#F93E3E'; // error
-            if (type === 'success') bgColor = '#49CC90';
-            if (type === 'info') bgColor = '#61AFFE';
+            let bgColor = 'rgba(249, 62, 62, 0.3)'; // error
+            if (type === 'success') bgColor = 'rgba(73, 204, 144, 0.3)';
+            if (type === 'info') bgColor = 'rgba(97, 175, 254, 0.3)';
 
             notification.style.cssText = \`
                 position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 15px 20px;
-                border-radius: 4px;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                padding: 16px 24px;
+                border-radius: 6px;
                 background: \${bgColor};
                 color: white;
                 font-size: 14px;
                 z-index: 10000;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-                animation: slideIn 0.3s ease-out;
-                max-width: 400px;
+                box-shadow: 0 12px 24px rgba(0,0,0,0.35);
+                animation: slideIn 0.25s ease-out forwards;
+                max-width: 420px;
+                text-align: center;
                 word-wrap: break-word;
+                line-height: 1.5;
             \`;
             notification.textContent = message;
             document.body.appendChild(notification);
 
             const duration = type === 'info' ? 2000 : 3000;
             setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease-out';
+                notification.style.animation = 'slideOut 0.2s ease-in forwards';
                 setTimeout(() => notification.remove(), 300);
             }, duration);
         }
@@ -3088,24 +3091,25 @@ export class ApiTestPanel {
          */
         function showDetailedNotification(message, type) {
             const notification = document.createElement('div');
-            let bgColor = '#F93E3E'; // error
-            if (type === 'success') bgColor = '#49CC90';
-            if (type === 'info') bgColor = '#61AFFE';
+            let bgColor = 'rgba(249, 62, 62, 0.3)'; // error
+            if (type === 'success') bgColor = 'rgba(73, 204, 144, 0.3)';
+            if (type === 'info') bgColor = 'rgba(97, 175, 254, 0.3)';
 
             notification.style.cssText = \`
                 position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 15px 20px;
-                border-radius: 4px;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                padding: 18px 26px;
+                border-radius: 6px;
                 background: \${bgColor};
                 color: white;
                 font-size: 13px;
                 z-index: 10000;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-                animation: slideIn 0.3s ease-out;
-                max-width: 500px;
-                max-height: 300px;
+                box-shadow: 0 16px 32px rgba(0,0,0,0.4);
+                animation: slideIn 0.25s ease-out forwards;
+                max-width: 520px;
+                max-height: 320px;
                 overflow-y: auto;
                 white-space: pre-wrap;
                 word-wrap: break-word;
@@ -3116,7 +3120,7 @@ export class ApiTestPanel {
 
             const duration = 5000; // 错误信息显示更长时间
             setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease-out';
+                notification.style.animation = 'slideOut 0.2s ease-in forwards';
                 setTimeout(() => notification.remove(), 300);
             }, duration);
         }
