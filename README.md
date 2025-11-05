@@ -40,7 +40,7 @@ An intelligent Visual Studio Code extension that automatically detects and tests
 - Multiple environment support (Development, Staging, Production, etc.)
 - Each environment with custom base URL, base path, and headers
 - Quick switching between environments
-- Global header configuration
+- Define headers per environment as needed
 
 ### 📝 Advanced Features
 - **Body Editor**: Full-featured JSON editor with formatting and AI generation

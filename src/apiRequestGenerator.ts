@@ -42,10 +42,7 @@ export class ApiRequestGenerator {
         const request: GeneratedRequest = {
             url: '',
             method: endpoint.method,
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
+            headers: {},
             queryParams: {},
             pathParams: {},
             body: undefined
@@ -81,9 +78,7 @@ export class ApiRequestGenerator {
             url: '',
             method: endpoint.method,
             headers: {
-                ...environment.headers, // Use environment headers as base
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                ...environment.headers
             },
             queryParams: {},
             pathParams: {},
@@ -126,8 +121,6 @@ export class ApiRequestGenerator {
         if (formParams.length > 0) {
             // Generate form data
             request.formData = this.generateFormData(formParams);
-            // Set multipart/form-data header
-            request.headers['Content-Type'] = 'multipart/form-data';
         } else if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
             // Generate body for POST/PUT methods
             const result = this.generateRequestBody(endpoint.parameters, skipErrors);

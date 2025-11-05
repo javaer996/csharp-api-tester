@@ -328,11 +328,11 @@ async function addNewEnvironment(environmentManager: EnvironmentManager): Promis
 
     const headersJson = await vscode.window.showInputBox({
         prompt: 'Enter headers as JSON (optional)',
-        placeHolder: '{"Authorization": "Bearer token"}',
-        value: '{"Content-Type": "application/json"}'
+        placeHolder: '{"Header-Name": "value"}',
+        value: '{}'
     });
 
-    let headers = { 'Content-Type': 'application/json' };
+    let headers: Record<string, string> = {};
     if (headersJson) {
         try {
             headers = JSON.parse(headersJson);

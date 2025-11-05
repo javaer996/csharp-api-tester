@@ -86,19 +86,14 @@
               "name": "Development",
               "baseUrl": "http://localhost:5000",
               "basePath": "/api",
-              "headers": {
-                "Content-Type": "application/json"
-              },
+              "headers": {},
               "active": true
             },
             {
               "name": "Staging",
               "baseUrl": "https://staging.example.com",
               "basePath": "/api",
-              "headers": {
-                "Content-Type": "application/json",
-                "Authorization": "Bearer your-token"
-              },
+              "headers": {},
               "active": false
             }
           ],
@@ -154,11 +149,6 @@
           "type": "number",
           "default": 60000,
           "description": "AI API request timeout in milliseconds (default: 60000ms)"
-        },
-        "csharpApiTester.globalHeaders": {
-          "type": "object",
-          "default": {},
-          "description": "Global headers applied to all requests"
         },
         "csharpApiTester.enableApiDetection": {
           "type": "boolean",

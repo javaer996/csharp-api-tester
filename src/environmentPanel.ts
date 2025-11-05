@@ -406,7 +406,7 @@ export class EnvironmentPanel {
 
                 <div class="form-group">
                     <label for="env-headers">Headers (JSON)</label>
-                    <textarea id="env-headers" placeholder='{"Content-Type": "application/json", "Authorization": "Bearer token"}'></textarea>
+                    <textarea id="env-headers" placeholder='{}'></textarea>
                 </div>
 
                 <div class="variables-section">
@@ -490,7 +490,7 @@ export class EnvironmentPanel {
             editingEnvironment = null;
             document.getElementById('form-title').textContent = 'Add New Environment';
             document.getElementById('environment-form').reset();
-            document.getElementById('env-headers').value = '{"Content-Type": "application/json"}';
+            document.getElementById('env-headers').value = '{}';
             document.getElementById('variables-container').innerHTML = '';
             document.getElementById('form-section').classList.remove('hidden');
         }

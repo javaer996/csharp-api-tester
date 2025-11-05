@@ -18,12 +18,21 @@ export class EnvironmentManager {
     private static instance: EnvironmentManager;
     private config: EnvironmentConfig;
     private statusBarItem: vscode.StatusBarItem;
+    private configChangeListener?: vscode.Disposable;
 
     private constructor() {
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
         this.config = this.getDefaultConfig(); // Initialize with default config
         this.loadConfiguration();
         this.updateStatusBar();
+
+        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration('csharpApiTester.environments') ||
+                event.affectsConfiguration('csharpApiTester.currentEnvironment')) {
+                this.loadConfiguration();
+                this.updateStatusBar();
+            }
+        });
     }
 
     public static getInstance(): EnvironmentManager {
@@ -67,9 +76,7 @@ export class EnvironmentManager {
                     name: 'Development',
                     baseUrl: 'http://localhost:5000',
                     basePath: '/api',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: {},
                     customVariables: {},
                     active: true
                 },
@@ -77,10 +84,7 @@ export class EnvironmentManager {
                     name: 'Staging',
                     baseUrl: 'https://staging.example.com',
                     basePath: '/api',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer your-token'
-                    },
+                    headers: {},
                     customVariables: {
                         'API_VERSION': 'v1',
                         'DEBUG_MODE': 'true'
@@ -204,6 +208,7 @@ export class EnvironmentManager {
 
     public dispose(): void {
         this.statusBarItem.dispose();
+        this.configChangeListener?.dispose();
     }
 
     public async showEnvironmentPicker(): Promise<string | undefined> {
