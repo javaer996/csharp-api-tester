@@ -35,7 +35,7 @@
   "activationEvents": [
     "onLanguage:csharp"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
@@ -117,7 +117,11 @@
         "csharpApiTester.ai.provider": {
           "type": "string",
           "default": "openai",
-          "enum": ["openai", "azure-openai", "custom"],
+          "enum": [
+            "openai",
+            "azure-openai",
+            "custom"
+          ],
           "description": "AI provider type"
         },
         "csharpApiTester.ai.apiKey": {
@@ -157,7 +161,12 @@
         },
         "csharpApiTester.searchStrategy": {
           "type": "string",
-          "enum": ["fast", "balanced", "thorough", "custom"],
+          "enum": [
+            "fast",
+            "balanced",
+            "thorough",
+            "custom"
+          ],
           "default": "balanced",
           "description": "Search strategy for finding class definitions: fast (500 files), balanced (1000 files), thorough (2000 files), custom (use searchFileLimit)"
         },
@@ -170,14 +179,20 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack --mode development",
+    "watch": "webpack --mode development --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tsc": "tsc -p ./",
+    "watch-tsc": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
     "@types/node": "18.x",
-    "typescript": "^4.9.4"
+    "@types/vscode": "^1.74.0",
+    "ts-loader": "^9.5.4",
+    "typescript": "^4.9.4",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^6.0.1"
   },
   "dependencies": {
     "axios": "^1.6.0"
