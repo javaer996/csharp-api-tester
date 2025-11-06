@@ -244,8 +244,10 @@ export function activate(context: vscode.ExtensionContext) {
     const documentSaveDisposable = vscode.workspace.onDidSaveTextDocument((document) => {
         if (document.languageId === 'csharp') {
             console.log(`[C# API Extension] Document saved, invalidating cache for: ${document.uri.fsPath}`);
-            const cache = detector.getClassParser().getCache();
+            const classParser = detector.getClassParser();
+            const cache = classParser.getCache();
             cache.invalidateFile(document.uri.fsPath);
+            classParser.invalidateDocumentCache(document.uri.fsPath);
         }
     });
 

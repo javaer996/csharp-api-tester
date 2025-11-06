@@ -18,12 +18,10 @@ export interface EnumInfo {
 export class CSharpClassParser {
     private cache: ClassDefinitionCache;
     private fileClassCache: Map<string, Set<string>>; // filePath -> Set of class names in that file
-    private fileLinesCache: Map<string, string[]>; // ⭐ NEW: Cache document lines to avoid repeated getText() and split()
 
     constructor() {
         this.cache = new ClassDefinitionCache(100, 30); // Max 100 entries, 30 min TTL
         this.fileClassCache = new Map();
-        this.fileLinesCache = new Map();
         console.log('[CSharpClassParser] Initialized with cache and file-level class cache');
     }
 
@@ -33,22 +31,8 @@ export class CSharpClassParser {
      * @returns Array of lines
      */
     private getDocumentLines(document: vscode.TextDocument): string[] {
-        const filePath = document.uri.fsPath;
-
-        // Check cache first
-        if (this.fileLinesCache.has(filePath)) {
-            return this.fileLinesCache.get(filePath)!;
-        }
-
-        // Cache miss: read and split
         const text = document.getText();
-        const lines = text.split('\n');
-
-        // Cache for future use
-        this.fileLinesCache.set(filePath, lines);
-        console.log(`[CSharpClassParser] 💾 Cached ${lines.length} lines from ${filePath}`);
-
-        return lines;
+        return text.split('\n');
     }
 
     /**
@@ -178,14 +162,7 @@ export class CSharpClassParser {
             return [];
         }
 
-        // Check cache first - but don't return yet, we need to verify it includes base class properties
-        const cached = this.cache.get(actualClassName);
-        if (cached) {
-            console.log(`[CSharpClassParser] 🎯 Cache HIT for ${actualClassName}, found ${cached.properties.length} properties`);
-            // We'll verify if we need to reparse after checking for base classes
-        }
-
-        // ⭐ PERFORMANCE: Use cached lines instead of repeated getText() and split()
+        // Always work with the latest document content
         const lines = this.getDocumentLines(document);
 
         console.log(`[CSharpClassParser] Searching for class: ${actualClassName}`);
@@ -265,26 +242,9 @@ export class CSharpClassParser {
             allProperties[0]._baseClassWarning = baseClassWarning;
         }
 
-        // Decide whether to use cached result or new result
-        if (cached) {
-            // If new parse found more properties (including base class properties), use the new result
-            if (allProperties.length > cached.properties.length) {
-                console.log(`[CSharpClassParser] 🔄 Cache OUTDATED: cached had ${cached.properties.length} properties, but new parse found ${allProperties.length} properties (likely including base class). Updating cache.`);
-                this.cache.set(actualClassName, allProperties, null, document.uri.fsPath);
-                return allProperties;
-            } else {
-                // Cache is complete, use cached result
-                console.log(`[CSharpClassParser] ✅ Cache is complete (${cached.properties.length} properties), using cached result`);
-                return cached.properties;
-            }
-        } else {
-            // No cache, store new result
-            if (allProperties.length > 0) {
-                console.log(`[CSharpClassParser] 💾 Caching ${actualClassName} with ${allProperties.length} properties (including base classes)`);
-                this.cache.set(actualClassName, allProperties, null, document.uri.fsPath);
-            }
-            return allProperties;
-        }
+        console.log(`[CSharpClassParser] 💾 Caching fresh definition for ${actualClassName} with ${allProperties.length} properties (including inherited overrides)`);
+        this.cache.set(actualClassName, allProperties, null, document.uri.fsPath);
+        return allProperties;
     }
 
     /**
@@ -1582,6 +1542,24 @@ export class CSharpClassParser {
         const normalizedType = type.replace('?', '').toLowerCase();
         return simpleTypes.includes(normalizedType) ||
                simpleTypes.some(t => normalizedType === t.toLowerCase());
+    }
+
+    /**
+     * Invalidate cached metadata for a specific document
+     */
+    invalidateDocumentCache(filePath: string): void {
+        if (this.fileClassCache.delete(filePath)) {
+            console.log(`[CSharpClassParser] 🧹 Cleared class cache for ${filePath}`);
+        }
+    }
+
+    /**
+     * Invalidate cached definition for a specific class
+     */
+    invalidateClassCache(className: string): void {
+        const actualClassName = this.extractInnerType(className);
+        console.log(`[CSharpClassParser] 🧹 Invalidating class cache for ${actualClassName}`);
+        this.cache.invalidateClass(actualClassName);
     }
 
     /**

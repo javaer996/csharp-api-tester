@@ -291,14 +291,13 @@ export class ApiEndpointDetector {
         console.log(`[C# API Detector] 🎯 Parsing parameters for method: ${methodName || 'unknown'}, route: ${route || 'unknown'}`);
         console.log(`[C# API Detector] 📝 Method signature: ${methodSignature}`);
 
-        // Extract parameter list
-        const paramMatch = methodSignature.match(/\(([^)]+)\)/);
-        if (!paramMatch) {
+        // Extract parameter list with balanced parentheses awareness
+        const paramString = this.extractParameterList(methodSignature);
+        if (paramString === null) {
             console.log(`[C# API Detector] ⚠️ No parameters found in method signature`);
             return parameters;
         }
 
-        const paramString = paramMatch[1];
         const paramList = this.splitParameters(paramString);
 
         console.log(`[C# API Detector] 📋 Found ${paramList.length} parameters: [${paramList.join(', ')}]`);
@@ -317,6 +316,67 @@ export class ApiEndpointDetector {
 
         console.log(`[C# API Detector] ✅ Completed parsing ${parameters.length} parameters for ${methodName}`);
         return parameters;
+    }
+
+    private extractParameterList(methodSignature: string): string | null {
+        const startIndex = methodSignature.indexOf('(');
+        if (startIndex === -1) {
+            return null;
+        }
+
+        let depth = 0;
+        let quoteChar: '"' | '\'' | undefined;
+        let verbatimString = false;
+
+        for (let i = startIndex; i < methodSignature.length; i++) {
+            const char = methodSignature[i];
+            const prevChar = i > 0 ? methodSignature[i - 1] : '';
+
+            if (quoteChar) {
+                if (quoteChar === '"' && verbatimString) {
+                    if (char === '"' && methodSignature[i + 1] === '"') {
+                        i++; // Skip escaped quote in verbatim string
+                        continue;
+                    }
+                    if (char === '"') {
+                        quoteChar = undefined;
+                        verbatimString = false;
+                    }
+                    continue;
+                }
+
+                if (char === quoteChar && prevChar !== '\\') {
+                    quoteChar = undefined;
+                    continue;
+                }
+                continue;
+            } else {
+                if (char === '"' || char === '\'') {
+                    quoteChar = char;
+                    if (char === '"') {
+                        verbatimString = false;
+                        for (let j = i - 1; j >= 0 && (methodSignature[j] === '@' || methodSignature[j] === '$'); j--) {
+                            if (methodSignature[j] === '@') {
+                                verbatimString = true;
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            if (char === '(') {
+                depth++;
+            } else if (char === ')') {
+                depth--;
+                if (depth === 0) {
+                    return methodSignature.substring(startIndex + 1, i);
+                }
+            }
+        }
+
+        return null;
     }
 
     private splitParameters(paramString: string): string[] {

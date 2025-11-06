@@ -1119,13 +1119,12 @@ export class ApiTestPanel {
         // ⭐ CRITICAL: 清除 ClassDefinitionCache 中的缓存,确保真正重新解析
         if (this._detector) {
             const classParser = this._detector.getClassParser();
-            const cache = classParser.getCache();
 
             // 清除 body/form 参数相关的类缓存
             for (const param of this._currentEndpoint.parameters) {
                 if (param.source === 'body' || param.source === 'form') {
                     console.log(`[ApiTestPanel] Clearing cache for class: ${param.type}`);
-                    cache.invalidateClass(param.type);
+                    classParser.invalidateClassCache(param.type);
 
                     // 清空参数级别的缓存
                     console.log(`[ApiTestPanel] Clearing properties cache for ${param.type}`);
