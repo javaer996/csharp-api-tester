@@ -299,10 +299,6 @@ export class ApiTestPanel {
                             console.log(`[ApiTestPanel] 💬 Processing viewAIConversation`);
                             await this.viewAIConversation();
                             break;
-                        case 'restoreOriginalJson':
-                            console.log(`[ApiTestPanel] 🔄 Processing restoreOriginalJson`);
-                            this.restoreOriginalJson();
-                            break;
                         case 'cancelParsing':
                             console.log(`[ApiTestPanel] ❌ Processing cancelParsing`);
                             this.cancelParsing();
@@ -1105,13 +1101,6 @@ export class ApiTestPanel {
         });
     }
 
-    private restoreOriginalJson(): void {
-        // Send message to webview to restore original JSON
-        this._panel.webview.postMessage({
-            type: 'restoreOriginalJsonData'
-        });
-    }
-
     private cancelParsing(): void {
         console.log('[ApiTestPanel] Setting cancellation flag...');
         this._parsingCancelled = true;
@@ -1748,23 +1737,6 @@ export class ApiTestPanel {
             background: var(--vscode-button-secondaryBackground);
         }
 
-        .restore-button {
-            background: transparent;
-            color: var(--vscode-foreground);
-            border: 1px solid var(--vscode-button-border);
-            padding: 4px 10px;
-            border-radius: 3px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            opacity: 0.8;
-        }
-
-        .restore-button:hover {
-            opacity: 1;
-            background: var(--vscode-button-secondaryBackground);
-        }
-
         /* Modal Dialog */
         .modal-overlay {
             display: none;
@@ -2263,7 +2235,6 @@ export class ApiTestPanel {
 
                     <div class="body-editor-toolbar">
                         <div class="body-editor-toolbar-left">
-                            <button class="restore-button" onclick="restoreOriginalJson()" title="Restore Original JSON">↺ Restore</button>
                             <button class="format-button" onclick="reparseBodyParams()" title="重新解析参数" id="reparse-btn">🔄 重新解析</button>
                             <button class="view-conversation-button" onclick="viewAIConversation()" title="View AI Conversation">💬 View AI</button>
                         </div>
@@ -2382,7 +2353,6 @@ export class ApiTestPanel {
         let headers = ${headersJson};
         let formData = ${formDataJson || '{}'};
         const baseUrl = '${urlWithoutQuery}';
-        const originalJsonBody = ${JSON.stringify(bodyJsonWithComments || '')};
         const savedParameters = ${savedStateJson};
         let currentEditingParam = null; // For value editor
         const methodClassMap = ${methodClassMapJson};
@@ -2943,22 +2913,6 @@ export class ApiTestPanel {
             });
         }
 
-        // Restore original JSON
-        function restoreOriginalJson() {
-            if (!originalJsonBody) {
-                alert('No original JSON template available');
-                return;
-            }
-
-            const textarea = document.getElementById('request-body');
-            if (textarea) {
-                textarea.value = originalJsonBody;
-                validateJSON(); // 验证恢复的内容
-                showNotification('✅ Original JSON restored', 'success');
-                scheduleAutoSave();
-            }
-        }
-
         // Parsing status functions
         function showParsingStatus(message) {
             const overlay = document.getElementById('body-parsing-overlay');
@@ -3305,8 +3259,6 @@ export class ApiTestPanel {
                 handleAIGenerationResult(message.result);
             } else if (message.type === 'aiConversationData') {
                 displayAIConversation(message.conversation);
-            } else if (message.type === 'restoreOriginalJsonData') {
-                // This is handled by the restoreOriginalJson function directly
             } else if (message.type === 'parsingStarted') {
                 showParsingStatus(message.message);
             } else if (message.type === 'parsingStatus') {
