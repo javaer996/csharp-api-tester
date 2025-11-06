@@ -5,10 +5,13 @@ import { ApiTestPanel } from './apiTestPanel';
 import { ApiRequestGenerator } from './apiRequestGenerator';
 import { EnvironmentManager } from './environmentManager';
 import { EnvironmentPanel } from './environmentPanel';
+import { ParameterStorage } from './parameterStorage';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('🚀 C# API Tester extension is now active!');
     console.log('✅ Extension context:', context.extensionUri);
+
+    ParameterStorage.initialize(context);
 
     const detector = new ApiEndpointDetector();
     const requestGenerator = new ApiRequestGenerator();

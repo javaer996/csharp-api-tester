@@ -4,6 +4,7 @@ import { ApiRequestGenerator, GeneratedRequest } from './apiRequestGenerator';
 import { EnvironmentManager, Environment } from './environmentManager';
 import { AIService } from './aiService';
 import axios, { AxiosError } from 'axios';
+import { ParameterStorage, SavedApiParameters } from './parameterStorage';
 
 export class ApiTestPanel {
     private static panels: Map<string, ApiTestPanel> = new Map();
@@ -22,6 +23,136 @@ export class ApiTestPanel {
 
     private _parsingCancelled: boolean = false;
     private _sourceDocument: vscode.TextDocument | undefined;
+    private _savedParameters: SavedApiParameters | undefined;
+    private _allowBodyTemplateOverwrite: boolean = false;
+
+    private loadSavedParametersForEnvironment(environment: Environment): void {
+        if (!this._currentEndpoint) {
+            this._savedParameters = undefined;
+            return;
+        }
+
+        const storageKey = ParameterStorage.createStorageKey(this._panelKey, environment?.name);
+        this._savedParameters = ParameterStorage.getParameters(storageKey);
+        console.log('[ApiTestPanel] 💾 Loaded saved parameters:', storageKey, !!this._savedParameters);
+    }
+
+    private mergeSavedParameters(request: GeneratedRequest): GeneratedRequest {
+        if (!this._savedParameters) {
+            return request;
+        }
+
+        const saved = this._savedParameters;
+        const mergedHeaders = { ...request.headers, ...saved.headers };
+        const mergedQuery = { ...request.queryParams, ...saved.queryParams };
+        const hasSavedForm = saved.formData && Object.keys(saved.formData).length > 0;
+        const mergedFormData = hasSavedForm
+            ? { ...saved.formData }
+            : (request.formData ? { ...request.formData } : undefined);
+
+        return {
+            ...request,
+            url: saved.url || request.url,
+            method: saved.method || request.method,
+            headers: mergedHeaders,
+            queryParams: mergedQuery,
+            formData: mergedFormData
+        };
+    }
+
+    private async saveParameters(data: {
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        queryParams: Record<string, string>;
+        formData: Record<string, string>;
+        bodyText: string;
+    }): Promise<void> {
+        if (!this._currentEndpoint) {
+            return;
+        }
+
+        const environment = this._environmentManager.getCurrentEnvironment();
+        const storageKey = ParameterStorage.createStorageKey(this._panelKey, environment?.name);
+        const globalHeaders = environment?.headers || {};
+        const globalHeaderKeys = new Set(Object.keys(globalHeaders).map(key => key.toLowerCase()));
+
+        const filteredHeaders: Record<string, string> = {};
+        if (data.headers) {
+            for (const [key, value] of Object.entries(data.headers)) {
+                if (!key) {
+                    continue;
+                }
+                const normalizedKey = key.trim();
+                if (!normalizedKey) {
+                    continue;
+                }
+                if (globalHeaderKeys.has(normalizedKey.toLowerCase())) {
+                    continue;
+                }
+                filteredHeaders[normalizedKey] = value == null ? '' : String(value);
+            }
+        }
+
+        const saved: SavedApiParameters = {
+            method: (data.method || this._currentEndpoint.method || 'GET').toUpperCase(),
+            url: (data.url || '').trim(),
+            queryParams: this.normalizeStringRecord(data.queryParams),
+            headers: filteredHeaders,
+            formData: this.normalizeFormRecord(data.formData),
+            bodyText: data.bodyText == null ? '' : String(data.bodyText),
+            timestamp: Date.now()
+        };
+
+        this._savedParameters = saved;
+        this._allowBodyTemplateOverwrite = false;
+        await ParameterStorage.saveParameters(storageKey, saved);
+        console.log('[ApiTestPanel] 💾 Parameters saved:', storageKey);
+    }
+
+    private normalizeStringRecord(input?: Record<string, any>): Record<string, string> {
+        const result: Record<string, string> = {};
+        if (!input) {
+            return result;
+        }
+
+        for (const [key, value] of Object.entries(input)) {
+            if (!key) {
+                continue;
+            }
+            const normalizedKey = key.trim();
+            if (!normalizedKey) {
+                continue;
+            }
+            result[normalizedKey] = value == null ? '' : String(value);
+        }
+
+        return result;
+    }
+
+    private normalizeFormRecord(input?: Record<string, any>): Record<string, string> {
+        const result: Record<string, string> = {};
+        if (!input) {
+            return result;
+        }
+
+        for (const [key, value] of Object.entries(input)) {
+            if (!key) {
+                continue;
+            }
+            const normalizedKey = key.trim();
+            if (!normalizedKey) {
+                continue;
+            }
+            if (value && typeof value === 'object') {
+                result[normalizedKey] = '[FILE]';
+            } else {
+                result[normalizedKey] = value == null ? '' : String(value);
+            }
+        }
+
+        return result;
+    }
 
     public static createOrShow(extensionUri: vscode.Uri, detector: ApiEndpointDetector, endpoint?: ApiEndpointInfo) {
         console.log('[ApiTestPanel] 🎯 createOrShow called with endpoint:', endpoint?.route, 'detector provided:', !!detector);
@@ -180,6 +311,9 @@ export class ApiTestPanel {
                             console.log(`[ApiTestPanel] 🔄 Processing reparseBodyParams`);
                             await this.reparseBodyParameters();
                             break;
+                        case 'saveParameters':
+                            await this.saveParameters(message.data);
+                            break;
                         default:
                             console.log(`[ApiTestPanel] ❓ Unknown message type:`, message.type);
                     }
@@ -216,6 +350,10 @@ export class ApiTestPanel {
             return;
         }
 
+        this.loadSavedParametersForEnvironment(currentEnvironment);
+        const savedBody = this._savedParameters?.bodyText;
+        this._allowBodyTemplateOverwrite = !this._savedParameters || savedBody === undefined || savedBody.trim().length === 0;
+
         // 保存当前的 document 供后续解析使用
         this._sourceDocument = vscode.window.activeTextEditor?.document;
 
@@ -243,14 +381,24 @@ export class ApiTestPanel {
         const skipErrors = !hasCachedErrors;
         console.log(`[ApiTestPanel] Initial render with skipErrors = ${skipErrors}`);
         const generatedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, skipErrors);
+        const mergedRequest = this.mergeSavedParameters(generatedRequest);
 
         // Render complete UI immediately (no full-screen loading)
-        this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, generatedRequest, fullHeaders, currentEnvironment);
+        this._panel.webview.html = this.getTestPanelHtml(this._currentEndpoint, mergedRequest, fullHeaders, currentEnvironment, this._savedParameters);
 
         // ⚡ LAZY LOADING: Parse class definitions in background
         // This dramatically improves CodeLens performance
         // Body tab will show parsing status, not blocking other operations
-        this.parseEndpointClassDefinitionsInBackground();
+        const hasBodyOrFormParam = this._currentEndpoint.parameters.some(p => p.source === 'body' || p.source === 'form');
+        const hasSavedBodyContent = typeof savedBody === 'string' && savedBody.trim().length > 0;
+
+        if (hasBodyOrFormParam) {
+            if (!hasSavedBodyContent || this._allowBodyTemplateOverwrite) {
+                this.parseEndpointClassDefinitionsInBackground();
+            } else {
+                console.log('[ApiTestPanel] ⏭️ Skipping automatic parsing because saved body content exists');
+            }
+        }
     }
 
     /**
@@ -496,11 +644,18 @@ export class ApiTestPanel {
             // 注入错误注释到JSON中
             const bodyWithComments = this.injectErrorCommentsIntoJson(bodyJson, updatedRequest.errors || []);
 
-            // 总是发送body更新消息,无论是否有错误
-            this._panel.webview.postMessage({
-                type: 'updateBodyContent',
-                body: bodyWithComments || '// 请手动填写请求体'
-            });
+            const shouldUpdateBody = this._allowBodyTemplateOverwrite || !this._savedParameters;
+
+            if (shouldUpdateBody) {
+                this._panel.webview.postMessage({
+                    type: 'updateBodyContent',
+                    body: bodyWithComments || '// 请手动填写请求体'
+                });
+            } else {
+                console.log('[ApiTestPanel] 🛑 Skipping body template update to preserve saved content');
+            }
+
+            this._allowBodyTemplateOverwrite = false;
 
             // 在控制台输出错误信息(如果有)
             if (hasErrors) {
@@ -605,6 +760,19 @@ export class ApiTestPanel {
         }
 
         return bodyJsonWithComments;
+    }
+
+    private escapeHtmlForTextarea(value: string): string {
+        if (!value) {
+            return '';
+        }
+
+        return value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     private async testApi(requestData: any) {
@@ -957,6 +1125,8 @@ export class ApiTestPanel {
 
         console.log('[ApiTestPanel] 🔄 Starting reparsing...');
 
+        this._allowBodyTemplateOverwrite = true;
+
         // ⭐ CRITICAL: 清除 ClassDefinitionCache 中的缓存,确保真正重新解析
         if (this._detector) {
             const classParser = this._detector.getClassParser();
@@ -1089,7 +1259,7 @@ export class ApiTestPanel {
         `;
     }
 
-    private getTestPanelHtml(endpoint: ApiEndpointInfo, request: GeneratedRequest, _defaultHeaders: Record<string, string>, currentEnvironment: Environment): string {
+    private getTestPanelHtml(endpoint: ApiEndpointInfo, request: GeneratedRequest, _defaultHeaders: Record<string, string>, _currentEnvironment: Environment, savedParameters?: SavedApiParameters): string {
         // Check if endpoint has different parameter types
         const hasBodyParam = endpoint.parameters.some(p => p.source === 'body');
         const hasFormParam = endpoint.parameters.some(p => p.source === 'form');
@@ -1097,14 +1267,14 @@ export class ApiTestPanel {
         const hasHeaderParam = endpoint.parameters.some(p => p.source === 'header');
 
         // Prepare data for JavaScript injection
-        const endpointMethod = endpoint.method;
-        const endpointMethodUpper = endpointMethod.toUpperCase();
+        const requestMethod = request.method || endpoint.method;
+        const requestMethodUpper = requestMethod.toUpperCase();
         const endpointRoute = endpoint.route;
 
         const standardHttpMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT'];
-        const httpMethods = Array.from(new Set([endpointMethodUpper, ...standardHttpMethods]));
+        const httpMethods = Array.from(new Set([requestMethodUpper, ...standardHttpMethods]));
         const methodOptionsHtml = httpMethods
-            .map(method => `<option value="${method}" ${method === endpointMethodUpper ? 'selected' : ''}>${method}</option>`)
+            .map(method => `<option value="${method}" ${method === requestMethodUpper ? 'selected' : ''}>${method}</option>`)
             .join('');
         const methodClassMap: Record<string, string> = {
             GET: 'method-get',
@@ -1117,7 +1287,7 @@ export class ApiTestPanel {
             TRACE: 'method-trace',
             CONNECT: 'method-connect'
         };
-        const initialMethodClass = methodClassMap[endpointMethodUpper] ?? 'method-generic';
+        const initialMethodClass = methodClassMap[requestMethodUpper] ?? 'method-generic';
         const methodClassMapJson = JSON.stringify(methodClassMap);
 
         // Parse query params from the generated request
@@ -1125,12 +1295,21 @@ export class ApiTestPanel {
         const headersJson = JSON.stringify(request.headers);
         const bodyJson = request.body ? JSON.stringify(request.body, null, 2) : '';
         const formDataJson = request.formData ? JSON.stringify(request.formData) : '';
-        
+
         // Add errors as JSON comments if they exist
         const bodyJsonWithComments = this.injectErrorCommentsIntoJson(bodyJson, request.errors || []);
+        const hasExplicitSavedBody = savedParameters !== undefined && savedParameters.bodyText !== undefined;
+        const bodyParsingPlaceholder = hasBodyParam
+            ? '// 正在解析请求体，请稍候...\n// 如果长时间没有更新，请点击上方的“重新解析”按钮，或手动填写请求体。'
+            : '';
+        const initialBodyText = hasExplicitSavedBody
+            ? (savedParameters!.bodyText ?? '')
+            : (bodyJsonWithComments || bodyParsingPlaceholder);
+        const escapedInitialBody = this.escapeHtmlForTextarea(initialBodyText);
 
         // Get base URL without query string
         const urlWithoutQuery = request.url.split('?')[0];
+        const savedStateJson = JSON.stringify(savedParameters ?? null);
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -2095,7 +2274,7 @@ export class ApiTestPanel {
                         </div>
                     </div>
                     <div class="json-editor-container">
-                        <textarea id="request-body" class="json-editor" spellcheck="false">${bodyJsonWithComments || ''}</textarea>
+                        <textarea id="request-body" class="json-editor" spellcheck="false">${escapedInitialBody}</textarea>
                         <div id="json-error-message" class="json-error-message">
                             <span class="json-error-icon">⚠️</span>
                             <span id="json-error-text"></span>
@@ -2203,11 +2382,31 @@ export class ApiTestPanel {
         let headers = ${headersJson};
         let formData = ${formDataJson || '{}'};
         const baseUrl = '${urlWithoutQuery}';
-        let originalJsonBody = ${bodyJsonWithComments ? `\`${bodyJsonWithComments}\`` : 'null'}; // Store original JSON
+        const originalJsonBody = ${JSON.stringify(bodyJsonWithComments || '')};
+        const savedParameters = ${savedStateJson};
         let currentEditingParam = null; // For value editor
         const methodClassMap = ${methodClassMapJson};
         const methodFallbackClass = 'method-generic';
-        let currentMethod = '${endpointMethodUpper}';
+        let currentMethod = '${requestMethodUpper}';
+        let autoSaveTimer = null;
+        let suppressAutoSave = true;
+        let hasPendingChanges = false;
+        const AUTO_SAVE_DELAY = 200;
+
+        if (savedParameters) {
+            if (savedParameters.queryParams) {
+                queryParams = { ...savedParameters.queryParams };
+            }
+            if (savedParameters.headers) {
+                headers = { ...headers, ...savedParameters.headers };
+            }
+            if (savedParameters.formData) {
+                formData = { ...savedParameters.formData };
+            }
+            if (savedParameters.method) {
+                currentMethod = savedParameters.method.toUpperCase();
+            }
+        }
 
         function applyMethodAppearance(method) {
             const selector = document.getElementById('http-method');
@@ -2227,6 +2426,7 @@ export class ApiTestPanel {
                 methodSelect.addEventListener('change', () => {
                     currentMethod = methodSelect.value.toUpperCase();
                     applyMethodAppearance(currentMethod);
+                    scheduleAutoSave();
                 });
 
                 applyMethodAppearance(currentMethod);
@@ -2263,15 +2463,17 @@ export class ApiTestPanel {
                 // 添加实时验证(使用防抖)
                 let validationTimeout;
                 jsonEditor.addEventListener('input', () => {
+                    scheduleAutoSave();
                     clearTimeout(validationTimeout);
                     validationTimeout = setTimeout(() => {
                         validateJSON();
-                    }, 300); // 300ms 防抖
+                    }, 250); // 250ms 防抖
                 });
 
                 // 失去焦点时也验证一次
                 jsonEditor.addEventListener('blur', () => {
                     validateJSON();
+                    scheduleAutoSave(true);
                 });
             }
 
@@ -2282,16 +2484,35 @@ export class ApiTestPanel {
                 let fullscreenValidationTimeout;
                 fullscreenEditor.addEventListener('input', () => {
                     clearTimeout(fullscreenValidationTimeout);
+                    scheduleAutoSave();
                     fullscreenValidationTimeout = setTimeout(() => {
                         validateFullscreenJson();
-                    }, 300); // 300ms 防抖
+                    }, 250); // 250ms 防抖
                 });
 
                 // 失去焦点时也验证一次
                 fullscreenEditor.addEventListener('blur', () => {
                     validateFullscreenJson();
+                    scheduleAutoSave(true);
                 });
             }
+
+            window.addEventListener('beforeunload', () => {
+                saveParametersToExtension(true);
+            });
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    saveParametersToExtension(true);
+                }
+            });
+
+            setTimeout(() => {
+                suppressAutoSave = false;
+                if (hasPendingChanges) {
+                    saveParametersToExtension(true);
+                }
+            }, 300);
         });
 
         // Tab switching
@@ -2309,6 +2530,87 @@ export class ApiTestPanel {
 
             event.target.classList.add('active');
             document.getElementById('response-' + tabName + '-tab').classList.add('active');
+        }
+
+        function scheduleAutoSave(forceImmediate = false) {
+            if (autoSaveTimer) {
+                clearTimeout(autoSaveTimer);
+            }
+
+            if (forceImmediate) {
+                saveParametersToExtension(true);
+                return;
+            }
+
+            hasPendingChanges = true;
+
+            if (suppressAutoSave) {
+                return;
+            }
+
+            autoSaveTimer = setTimeout(() => {
+                saveParametersToExtension();
+            }, AUTO_SAVE_DELAY);
+        }
+
+        function saveParametersToExtension(force = false) {
+            if (!force && suppressAutoSave) {
+                return;
+            }
+
+            if (!force && !hasPendingChanges) {
+                return;
+            }
+
+            hasPendingChanges = false;
+
+            const methodElement = document.getElementById('http-method');
+            const bodyElement = document.getElementById('request-body');
+            const urlInput = document.getElementById('fullUrl');
+
+            const serializableHeaders = {};
+            Object.entries(headers || {}).forEach(([key, value]) => {
+                if (!key) {
+                    return;
+                }
+                serializableHeaders[key] = value == null ? '' : String(value);
+            });
+
+            const serializableQuery = {};
+            Object.entries(queryParams || {}).forEach(([key, value]) => {
+                if (!key) {
+                    return;
+                }
+                serializableQuery[key] = value == null ? '' : String(value);
+            });
+
+            const serializableForm = {};
+            Object.entries(formData || {}).forEach(([key, value]) => {
+                if (!key) {
+                    return;
+                }
+                if (value && typeof value === 'object') {
+                    serializableForm[key] = '[FILE]';
+                } else {
+                    serializableForm[key] = value == null ? '' : String(value);
+                }
+            });
+
+            const methodValue = methodElement ? methodElement.value.toUpperCase() : currentMethod;
+
+            vscode.postMessage({
+                type: 'saveParameters',
+                data: {
+                    url: urlInput ? urlInput.value : '',
+                    method: methodValue,
+                    headers: serializableHeaders,
+                    queryParams: serializableQuery,
+                    formData: serializableForm,
+                    bodyText: bodyElement ? bodyElement.value : ''
+                }
+            });
+
+            autoSaveTimer = null;
         }
 
         // Query params rendering
@@ -2380,11 +2682,17 @@ export class ApiTestPanel {
             const newKey = 'new_field';
             formData[newKey] = '';
             renderFormFields();
+            scheduleAutoSave();
         }
 
         // Update form field value
         function updateFormFieldValue(key, value) {
-            formData[key] = value;
+            if (value && typeof value === 'object') {
+                formData[key] = '[FILE]';
+            } else {
+                formData[key] = value;
+            }
+            scheduleAutoSave();
         }
 
         // Update form field key
@@ -2392,6 +2700,7 @@ export class ApiTestPanel {
             formData[newKey] = formData[oldKey];
             delete formData[oldKey];
             renderFormFields();
+            scheduleAutoSave();
         }
 
         // Toggle form field
@@ -2403,6 +2712,7 @@ export class ApiTestPanel {
         function deleteFormField(key) {
             delete formData[key];
             renderFormFields();
+            scheduleAutoSave();
         }
 
         // Change form field type
@@ -2413,6 +2723,7 @@ export class ApiTestPanel {
                 formData[key] = '';
             }
             renderFormFields();
+            scheduleAutoSave();
         }
 
         // Create param row
@@ -2439,6 +2750,7 @@ export class ApiTestPanel {
             queryParams[newKey] = '';
             renderQueryParams();
             updateUrlFromQueryParams();
+            scheduleAutoSave();
         }
 
         // Add header
@@ -2446,6 +2758,7 @@ export class ApiTestPanel {
             const newKey = 'New-Header';
             headers[newKey] = '';
             renderHeaders();
+            scheduleAutoSave();
         }
 
         // Update param value
@@ -2458,6 +2771,7 @@ export class ApiTestPanel {
             } else if (type === 'form') {
                 formData[key] = newValue;
             }
+            scheduleAutoSave();
         }
 
         // Update param key
@@ -2472,6 +2786,7 @@ export class ApiTestPanel {
                 delete headers[oldKey];
                 renderHeaders();
             }
+            scheduleAutoSave();
         }
 
         // Toggle param
@@ -2490,6 +2805,7 @@ export class ApiTestPanel {
                 delete headers[key];
                 renderHeaders();
             }
+            scheduleAutoSave();
         }
 
         // Update URL from query params
@@ -2510,13 +2826,20 @@ export class ApiTestPanel {
                     queryParams[key] = value;
                 });
                 renderQueryParams();
+                scheduleAutoSave();
             } catch (e) {
                 console.error('Invalid URL', e);
             }
         }
 
         // Listen to URL changes
-        document.getElementById('fullUrl').addEventListener('change', parseUrlToQueryParams);
+        document.getElementById('fullUrl').addEventListener('change', () => {
+            parseUrlToQueryParams();
+            scheduleAutoSave();
+        });
+        document.getElementById('fullUrl').addEventListener('input', () => {
+            scheduleAutoSave();
+        });
 
         // Format JSON
         function formatBodyJson() {
@@ -2525,6 +2848,7 @@ export class ApiTestPanel {
                 const parsed = JSON.parse(textarea.value);
                 textarea.value = JSON.stringify(parsed, null, 2);
                 validateJSON(); // Re-validate after formatting
+                scheduleAutoSave();
             } catch (error) {
                 alert('Invalid JSON: ' + error.message);
             }
@@ -2631,6 +2955,7 @@ export class ApiTestPanel {
                 textarea.value = originalJsonBody;
                 validateJSON(); // 验证恢复的内容
                 showNotification('✅ Original JSON restored', 'success');
+                scheduleAutoSave();
             }
         }
 
@@ -2672,6 +2997,7 @@ export class ApiTestPanel {
                 textarea.value = body;
                 validateJSON(); // 验证新的内容
                 // Body内容更新后不再显示弹窗提示
+                scheduleAutoSave();
             }
         }
 
@@ -2855,6 +3181,7 @@ export class ApiTestPanel {
 
             // Show success notification
             showNotification('✅ Changes applied', 'success');
+            scheduleAutoSave();
         }
 
         function formatFullscreenJson() {
@@ -2866,6 +3193,7 @@ export class ApiTestPanel {
                 editor.value = JSON.stringify(parsed, null, 2);
                 validateFullscreenJson();
                 showNotification('✅ JSON formatted', 'success');
+                scheduleAutoSave();
             } catch (error) {
                 showNotification('❌ Invalid JSON: ' + error.message, 'error');
             }
@@ -3047,6 +3375,7 @@ export class ApiTestPanel {
 
                 // Show success message
                 showNotification('✨ AI generated successfully!', 'success');
+                scheduleAutoSave();
             } else {
                 // Show error
                 showNotification('❌ ' + result.error, 'error');

@@ -339,7 +339,7 @@ export class CSharpClassParser {
      * @param patternType The type of pattern (direct, using_precise, using_fuzzy, global)
      * @returns The maximum number of files to search
      */
-    private getSearchFileLimit(pattern?: string, patternType?: 'direct' | 'using_precise' | 'using_fuzzy' | 'global'): number {
+    private getSearchFileLimit(pattern?: string, patternType?: 'direct' | 'using_precise' | 'using_fuzzy' | 'using_namespace' | 'global'): number {
         const config = vscode.workspace.getConfiguration('csharpApiTester');
         const strategy = config.get<string>('searchStrategy', 'balanced');
 
@@ -353,6 +353,9 @@ export class CSharpClassParser {
         } else if (patternType === 'using_fuzzy') {
             // Partial namespace path - moderately specific
             return 300;
+        } else if (patternType === 'using_namespace') {
+            // Namespace-level search without specific file name
+            return 400;
         } else if (patternType === 'global' || pattern === '**/*.cs') {
             // Global search - needs larger limit
             switch (strategy) {
@@ -395,11 +398,11 @@ export class CSharpClassParser {
      * @param usingStatements Array of namespace strings
      * @returns Array of pattern objects with type information
      */
-    private generateSearchPatterns(className: string, usingStatements: string[]): Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global'}> {
-        const patterns: Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global'}> = [];
+    private generateSearchPatterns(className: string, usingStatements: string[]): Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'using_namespace' | 'global'}> {
+        const patterns: Array<{pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'using_namespace' | 'global'}> = [];
         const addedPatterns = new Set<string>();
 
-        const addPattern = (pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'global') => {
+        const addPattern = (pattern: string, type: 'direct' | 'using_precise' | 'using_fuzzy' | 'using_namespace' | 'global') => {
             if (addedPatterns.has(pattern)) {
                 return;
             }
@@ -456,6 +459,9 @@ export class CSharpClassParser {
                 }
             }
 
+            // Namespace-level fallback: search all files under the namespace path
+            addPattern(`**/${namespacePath}/**/*.cs`, 'using_namespace');
+
             if (pathParts.length >= 2) {
                 const lastTwo = pathParts.slice(-2).join('/');
                 for (const candidate of candidateNames) {
@@ -464,6 +470,7 @@ export class CSharpClassParser {
                         addPattern(`**/${lastTwo}/**/${candidate.replace(/\./g, '/')}.cs`, 'using_fuzzy');
                     }
                 }
+                addPattern(`**/${lastTwo}/**/*.cs`, 'using_namespace');
             }
 
             if (pathParts.length >= 1) {
@@ -474,6 +481,7 @@ export class CSharpClassParser {
                         addPattern(`**/${lastOne}/**/${candidate.replace(/\./g, '/')}.cs`, 'using_fuzzy');
                     }
                 }
+                addPattern(`**/${lastOne}/**/*.cs`, 'using_namespace');
             }
         }
 
