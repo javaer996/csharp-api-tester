@@ -43,6 +43,10 @@
         "title": "C#HttpRequest: Test API Endpoint"
       },
       {
+        "command": "csharpApiTester.clearCacheAndTest",
+        "title": "C#HttpRequest: Clear Cache And Test"
+      },
+      {
         "command": "csharpApiTester.configureBaseUrl",
         "title": "C#HttpRequest: Configure API Base URL"
       },

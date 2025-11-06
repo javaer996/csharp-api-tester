@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ApiEndpointDetector } from './apiEndpointDetector';
+import { ApiEndpointDetector, ApiEndpointInfo } from './apiEndpointDetector';
 import { ApiCodeLensProvider } from './apiCodeLensProvider';
 import { ApiTestPanel } from './apiTestPanel';
 import { ApiRequestGenerator } from './apiRequestGenerator';
@@ -34,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(apiDetectionStatusBar);
 
     // Register commands
-    const testApiCommand = vscode.commands.registerCommand('csharpApiTester.testApi', async (apiInfo: any) => {
+    const testApiCommand = vscode.commands.registerCommand('csharpApiTester.testApi', async (apiInfo: ApiEndpointInfo | undefined) => {
         console.log('🎯 testApi command triggered with:', apiInfo);
         try {
             if (apiInfo) {
@@ -47,6 +47,87 @@ export function activate(context: vscode.ExtensionContext) {
         } catch (error) {
             console.error('❌ Error in testApi command:', error);
             vscode.window.showErrorMessage(`Failed to open API test panel: ${error}`);
+        }
+    });
+
+    const clearCacheAndTestCommand = vscode.commands.registerCommand('csharpApiTester.clearCacheAndTest', async (apiInfo: ApiEndpointInfo | undefined) => {
+        console.log('🧹 clearCacheAndTest command triggered with:', apiInfo);
+        if (!apiInfo) {
+            vscode.window.showWarningMessage('Unable to clear cache because no endpoint information was provided.');
+            return;
+        }
+
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor || activeEditor.document.languageId !== 'csharp') {
+            vscode.window.showWarningMessage('Please focus the corresponding C# file before clearing cache and testing.');
+            return;
+        }
+
+        const normalizeRoute = (route: string | undefined): string => {
+            if (!route) {
+                return '';
+            }
+            return route.replace(/\/+/g, '/').replace(/\/+$/, '').toLowerCase();
+        };
+
+        const normalizeName = (value: string | undefined): string => (value || '').toLowerCase();
+
+        const document = activeEditor.document;
+        const panelKey = ApiTestPanel.getPanelKey(apiInfo);
+
+        try {
+            console.log('🧹 Clearing cached parameters for panel:', panelKey);
+            await ParameterStorage.clearParametersForPanel(panelKey);
+
+            const classParser = detector.getClassParser();
+            console.log('🧹 Clearing class definition caches');
+            classParser.getCache().clear();
+            classParser.invalidateDocumentCache(document.uri.fsPath);
+
+            if (Array.isArray(apiInfo.parameters)) {
+                for (const param of apiInfo.parameters) {
+                    if (param?.type) {
+                        classParser.invalidateClassCache(param.type);
+                    }
+                }
+            }
+
+            ApiTestPanel.disposePanel(panelKey);
+
+            console.log('🔄 Re-detecting API endpoints after cache clear');
+            const refreshedEndpoints = await detector.detectApiEndpoints(document);
+            console.log(`🔄 Re-detection found ${refreshedEndpoints.length} endpoints`);
+
+            const targetRoute = normalizeRoute(apiInfo.route);
+            const targetController = normalizeName(apiInfo.controllerName);
+
+            let refreshedEndpoint = refreshedEndpoints.find(ep =>
+                ep.method === apiInfo.method &&
+                ep.methodName === apiInfo.methodName &&
+                normalizeRoute(ep.route) === targetRoute &&
+                (!targetController || normalizeName(ep.controllerName) === targetController)
+            );
+
+            if (!refreshedEndpoint) {
+                refreshedEndpoint = refreshedEndpoints.find(ep =>
+                    ep.method === apiInfo.method &&
+                    ep.methodName === apiInfo.methodName &&
+                    (!targetController || normalizeName(ep.controllerName) === targetController)
+                );
+            }
+
+            if (!refreshedEndpoint) {
+                vscode.window.showWarningMessage('Endpoint could not be re-detected after clearing cache. Opening with previous data.');
+                ApiTestPanel.createOrShow(context.extensionUri, detector, apiInfo);
+                return;
+            }
+
+            vscode.window.showInformationMessage('Cache cleared. Opening refreshed API test panel.');
+            ApiTestPanel.createOrShow(context.extensionUri, detector, refreshedEndpoint);
+            codeLensProvider.refresh();
+        } catch (error) {
+            console.error('❌ Error in clearCacheAndTest command:', error);
+            vscode.window.showErrorMessage(`Failed to clear cache and test: ${error instanceof Error ? error.message : String(error)}`);
         }
     });
 
@@ -227,7 +308,8 @@ export function activate(context: vscode.ExtensionContext) {
         switchEnvironmentCommand,
         openEnvironmentManagerCommand,
         testDebugCommand,
-        toggleApiDetectionCommand
+        toggleApiDetectionCommand,
+        clearCacheAndTestCommand
     );
 
     // Refresh code lenses when document changes

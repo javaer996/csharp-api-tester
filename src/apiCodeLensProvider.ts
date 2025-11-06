@@ -57,6 +57,13 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
                     };
                     codeLenses.push(new vscode.CodeLens(range, testCommand));
 
+                    const clearCacheCommand: vscode.Command = {
+                        title: '🧹 Clear Cache & Test',
+                        command: 'csharpApiTester.clearCacheAndTest',
+                        arguments: [endpoint]
+                    };
+                    codeLenses.push(new vscode.CodeLens(range, clearCacheCommand));
+
                     // Method info
                     const infoCommand: vscode.Command = {
                         title: `📋 ${endpoint.method} | ${endpoint.parameters.length} params | Returns: ${endpoint.returnType}`,

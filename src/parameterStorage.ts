@@ -44,6 +44,27 @@ export class ParameterStorage {
         }
     }
 
+    public static async clearParametersForPanel(panelKey: string): Promise<void> {
+        if (!panelKey) {
+            return;
+        }
+
+        const prefix = `${panelKey}@@`;
+        const all = this.readAll();
+        let modified = false;
+
+        for (const key of Object.keys(all)) {
+            if (key.startsWith(prefix)) {
+                delete all[key];
+                modified = true;
+            }
+        }
+
+        if (modified) {
+            await this.writeAll(all);
+        }
+    }
+
     private static readAll(): SavedParametersMap {
         if (!this.globalState) {
             return {};

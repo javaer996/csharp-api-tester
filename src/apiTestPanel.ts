@@ -10,6 +10,21 @@ export class ApiTestPanel {
     private static panels: Map<string, ApiTestPanel> = new Map();
     public static readonly viewType = 'apiTestPanel';
 
+    public static getPanelKey(endpoint?: ApiEndpointInfo): string {
+        return endpoint ? `${endpoint.method}-${endpoint.route}` : 'default';
+    }
+
+    public static disposePanel(panelKey: string): void {
+        if (!panelKey) {
+            return;
+        }
+
+        const existing = this.panels.get(panelKey);
+        if (existing) {
+            existing.dispose();
+        }
+    }
+
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
     private _disposables: vscode.Disposable[] = [];
@@ -227,9 +242,7 @@ export class ApiTestPanel {
             : undefined;
 
         // Generate unique key for this endpoint
-        const panelKey = endpoint
-            ? `${endpoint.method}-${endpoint.route}`
-            : 'default';
+        const panelKey = this.getPanelKey(endpoint);
 
         console.log('[ApiTestPanel] 📋 Panel key:', panelKey, 'existing panels:', Array.from(this.panels.keys()));
 
