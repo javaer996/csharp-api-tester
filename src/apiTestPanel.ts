@@ -25,6 +25,8 @@ export class ApiTestPanel {
     private _sourceDocument: vscode.TextDocument | undefined;
     private _savedParameters: SavedApiParameters | undefined;
     private _allowBodyTemplateOverwrite: boolean = false;
+    private _bodyTemplateUpdatePending: boolean = false;
+    private _bodyTemplateUpdateReason: string | null = null;
 
     private loadSavedParametersForEnvironment(environment: Environment): void {
         if (!this._currentEndpoint) {
@@ -105,7 +107,11 @@ export class ApiTestPanel {
         };
 
         this._savedParameters = saved;
-        this._allowBodyTemplateOverwrite = false;
+        if (!this._bodyTemplateUpdatePending) {
+            this._allowBodyTemplateOverwrite = false;
+        } else {
+            console.log(`[ApiTestPanel] ⏳ Body template update pending (${this._bodyTemplateUpdateReason ?? 'unknown'}), deferring overwrite lock`);
+        }
         await ParameterStorage.saveParameters(storageKey, saved);
         console.log('[ApiTestPanel] 💾 Parameters saved:', storageKey);
     }
@@ -152,6 +158,65 @@ export class ApiTestPanel {
         }
 
         return result;
+    }
+
+    private requestBodyTemplateUpdate(reason: string, forceAllow: boolean = false): void {
+        this._bodyTemplateUpdatePending = true;
+        this._bodyTemplateUpdateReason = reason;
+        if (forceAllow) {
+            this._allowBodyTemplateOverwrite = true;
+        }
+        console.log(`[ApiTestPanel] 🔁 Body template update requested (${reason})`);
+    }
+
+    private clearBodyTemplateUpdateState(source: string): void {
+        if (this._bodyTemplateUpdatePending) {
+            console.log(`[ApiTestPanel] ✅ Clearing body template update state after ${source} (reason: ${this._bodyTemplateUpdateReason ?? 'unknown'})`);
+        }
+        this._bodyTemplateUpdatePending = false;
+        this._bodyTemplateUpdateReason = null;
+    }
+
+    private shouldApplyGeneratedBodyTemplate(): boolean {
+        if (this._bodyTemplateUpdatePending) {
+            console.log(`[ApiTestPanel] ✅ Applying generated body template (pending reason: ${this._bodyTemplateUpdateReason ?? 'unknown'})`);
+            return true;
+        }
+        if (this._allowBodyTemplateOverwrite) {
+            console.log('[ApiTestPanel] ✅ Applying generated body template (overwrite flag enabled)');
+            return true;
+        }
+        if (!this._savedParameters) {
+            console.log('[ApiTestPanel] ✅ Applying generated body template (no saved parameters)');
+            return true;
+        }
+        console.log('[ApiTestPanel] ⏭️ Skipping body template update (user content preserved)');
+        return false;
+    }
+
+    private applyCachedBodyTemplateUpdate(): void {
+        if (!this._currentEndpoint) {
+            return;
+        }
+
+        const currentEnvironment = this._environmentManager.getCurrentEnvironment();
+        if (!currentEnvironment) {
+            return;
+        }
+
+        const regeneratedRequest = this._requestGenerator.generateRequestForEnvironment(this._currentEndpoint, currentEnvironment, false);
+        const bodyJson = regeneratedRequest.body ? JSON.stringify(regeneratedRequest.body, null, 2) : '';
+        const bodyWithComments = this.injectErrorCommentsIntoJson(bodyJson, regeneratedRequest.errors || []);
+
+        if (this.shouldApplyGeneratedBodyTemplate()) {
+            this._panel.webview.postMessage({
+                type: 'updateBodyContent',
+                body: bodyWithComments || '// 请手动填写请求体'
+            });
+        }
+
+        this._allowBodyTemplateOverwrite = false;
+        this.clearBodyTemplateUpdateState('cached-template');
     }
 
     public static createOrShow(extensionUri: vscode.Uri, detector: ApiEndpointDetector, endpoint?: ApiEndpointInfo) {
@@ -203,7 +268,7 @@ export class ApiTestPanel {
 
         // Create title with endpoint info
         const title = endpoint
-            ? `[TEST] ${endpoint.method} ${endpoint.route}`
+            ? `${endpoint.method} ${endpoint.route}`
             : 'API Test Panel';
 
         // Create a new panel
@@ -349,6 +414,14 @@ export class ApiTestPanel {
         this.loadSavedParametersForEnvironment(currentEnvironment);
         const savedBody = this._savedParameters?.bodyText;
         this._allowBodyTemplateOverwrite = !this._savedParameters || savedBody === undefined || savedBody.trim().length === 0;
+        if (this._allowBodyTemplateOverwrite) {
+            const reason = this._savedParameters ? 'saved-body-empty' : 'initial-render';
+            if (!this._bodyTemplateUpdatePending || this._bodyTemplateUpdateReason !== reason) {
+                this.requestBodyTemplateUpdate(reason);
+            }
+        } else if (this._bodyTemplateUpdatePending && this._bodyTemplateUpdateReason !== 'manual-reparse') {
+            this.clearBodyTemplateUpdateState('updateContent');
+        }
 
         // 保存当前的 document 供后续解析使用
         this._sourceDocument = vscode.window.activeTextEditor?.document;
@@ -402,7 +475,10 @@ export class ApiTestPanel {
      * @param force - Force reparsing even if properties already exist
      */
     private async parseEndpointClassDefinitionsInBackground(force: boolean = false) {
-        if (!this._currentEndpoint) return;
+        if (!this._currentEndpoint) {
+            this.clearBodyTemplateUpdateState('missing-endpoint');
+            return;
+        }
 
         // Reset cancellation flag
         this._parsingCancelled = false;
@@ -449,6 +525,10 @@ export class ApiTestPanel {
 
             if (!needsParsing) {
                 console.log('[ApiTestPanel] ⚡ No parsing needed, all parameters already parsed');
+                if (this._bodyTemplateUpdatePending || this._allowBodyTemplateOverwrite || !this._savedParameters) {
+                    console.log('[ApiTestPanel] 🔄 Applying cached body template without reparsing');
+                    this.applyCachedBodyTemplateUpdate();
+                }
                 return;
             }
         } else {
@@ -471,6 +551,7 @@ export class ApiTestPanel {
                 type: 'parsingFailed',
                 message: '无法获取源文件，请重新打开测试面板'
             });
+            this.clearBodyTemplateUpdateState('missing-document');
             return;
         }
 
@@ -481,6 +562,7 @@ export class ApiTestPanel {
                 type: 'parsingFailed',
                 message: '内部错误: Detector实例丢失,请重新打开测试面板'
             });
+            this.clearBodyTemplateUpdateState('missing-detector');
             return;
         }
 
@@ -498,6 +580,7 @@ export class ApiTestPanel {
                     type: 'parsingCancelled',
                     message: '解析已取消'
                 });
+                this.clearBodyTemplateUpdateState('cancelled');
                 return;
             }
 
@@ -591,6 +674,7 @@ export class ApiTestPanel {
         // Check if parsing was cancelled
         if (this._parsingCancelled) {
             console.log('[ApiTestPanel] 🚫 Parsing was cancelled, skip completion logic');
+            this.clearBodyTemplateUpdateState('cancelled');
             return;
         }
 
@@ -640,18 +724,17 @@ export class ApiTestPanel {
             // 注入错误注释到JSON中
             const bodyWithComments = this.injectErrorCommentsIntoJson(bodyJson, updatedRequest.errors || []);
 
-            const shouldUpdateBody = this._allowBodyTemplateOverwrite || !this._savedParameters;
+            const shouldUpdateBody = this.shouldApplyGeneratedBodyTemplate();
 
             if (shouldUpdateBody) {
                 this._panel.webview.postMessage({
                     type: 'updateBodyContent',
                     body: bodyWithComments || '// 请手动填写请求体'
                 });
-            } else {
-                console.log('[ApiTestPanel] 🛑 Skipping body template update to preserve saved content');
             }
 
             this._allowBodyTemplateOverwrite = false;
+            this.clearBodyTemplateUpdateState('parsing');
 
             // 在控制台输出错误信息(如果有)
             if (hasErrors) {
@@ -1114,7 +1197,7 @@ export class ApiTestPanel {
 
         console.log('[ApiTestPanel] 🔄 Starting reparsing...');
 
-        this._allowBodyTemplateOverwrite = true;
+        this.requestBodyTemplateUpdate('manual-reparse', true);
 
         // ⭐ CRITICAL: 清除 ClassDefinitionCache 中的缓存,确保真正重新解析
         if (this._detector) {
@@ -2946,12 +3029,15 @@ export class ApiTestPanel {
 
         function updateBodyContent(body) {
             const textarea = document.getElementById('request-body');
-            if (textarea && body) {
-                textarea.value = body;
-                validateJSON(); // 验证新的内容
-                // Body内容更新后不再显示弹窗提示
-                scheduleAutoSave();
+            if (!textarea) {
+                return;
             }
+
+            const newValue = body === undefined || body === null ? '' : body;
+            textarea.value = newValue;
+            validateJSON(); // 验证新的内容
+            // Body内容更新后不再显示弹窗提示
+            scheduleAutoSave();
         }
 
         function reparseBodyParams() {
