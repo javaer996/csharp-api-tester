@@ -2,7 +2,7 @@
   "name": "csharp-api-tester",
   "displayName": "C# API Tester",
   "description": "C# Web API testing extension with automatic endpoint detection and request generation",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "javaer996",
   "author": {
     "name": "tengjiang"

@@ -4,7 +4,7 @@
 
 An intelligent Visual Studio Code extension that automatically detects and tests C# Web API endpoints directly from your code editor with AI-powered smart JSON generation.
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.3-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -52,6 +52,8 @@ An intelligent Visual Studio Code extension that automatically detects and tests
 - **Request History**: View AI conversation history and restore original JSON templates
 - **Smart Tab Selection**: Automatically opens the most relevant tab (Form/Body/Query/Headers)
 - **Performance Optimization**: Configurable search strategy (fast/balanced/thorough) for class definition lookup
+- **Parameter Persistence**: Automatically saves and restores test parameters per environment (URL, headers, query params, body, form data)
+- **Cache Management**: Clear cached parameters and class definitions to force fresh API detection
 
 ## 📦 Installation
 
@@ -189,6 +191,17 @@ The test panel intelligently selects the default tab:
 - **Query Tab** → If `[FromQuery]` parameters exist
 - **Headers Tab** → Fallback
 
+### Parameter Persistence
+
+The extension automatically saves your test parameters for each API endpoint per environment:
+
+- **Auto-save**: Parameters are saved when you modify URL, headers, query params, body, or form data
+- **Auto-restore**: Previously saved parameters are restored when you reopen the test panel
+- **Environment-aware**: Each environment maintains separate parameter sets for the same endpoint
+- **Cached Data**: Includes URL, HTTP method, headers, query parameters, request body, and form data
+
+To start fresh with default values, use the **"Clear Cache And Test"** command from CodeLens or command palette.
+
 ## ⚙️ Configuration
 
 ### Extension Settings
@@ -290,6 +303,7 @@ For long header values or query parameters:
 | Command | Description |
 |---------|-------------|
 | `C#HttpRequest: Test API Endpoint` | Open test panel for selected endpoint |
+| `C#HttpRequest: Clear Cache And Test` | Clear cached parameters and class definitions, then test endpoint with fresh data |
 | `C#HttpRequest: Manage API Environments` | Open environment management dialog |
 | `C#HttpRequest: Switch Environment` | Quick switch between environments |
 | `C#HttpRequest: Configure API Base URL` | Set base URL for current environment |
@@ -324,6 +338,12 @@ This extension is perfect for:
 - For large projects, use "fast" search strategy to improve performance
 - For better accuracy with complex DTOs, use "thorough" strategy
 - Custom strategy allows fine-tuning based on your specific needs
+
+### Parameter Management
+- The extension automatically saves your test parameters (headers, body, query params, etc.)
+- Parameters are saved separately for each environment
+- To reset to default values, use **"Clear Cache And Test"** command from CodeLens button or command palette
+- Cache clearing also refreshes class definitions for accurate request generation
 
 ## 🛠️ Troubleshooting
 
@@ -371,10 +391,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - HTTP client powered by [Axios](https://axios-http.com/)
 - UI inspired by [Apifox](https://apifox.com/)
 - AI integration with OpenAI and compatible providers
-
-## 📊 Changelog
-
-See [CHANGELOG.md](./CHANGELOG.md) for version history and updates.
 
 ## 🔗 Links
 

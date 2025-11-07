@@ -4,7 +4,7 @@
 
 一个智能的 Visual Studio Code 扩展，可以直接从代码编辑器中自动检测和测试 C# Web API 端点，并支持 AI 驱动的智能 JSON 生成。
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.3-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -52,6 +52,8 @@
 - **请求历史**：查看 AI 对话历史并恢复原始 JSON 模板
 - **智能选项卡选择**：自动打开最相关的选项卡（Form/Body/Query/Headers）
 - **性能优化**：可配置的搜索策略（fast/balanced/thorough）用于类定义查找
+- **参数持久化**：自动保存和恢复每个环境的测试参数（URL、请求头、查询参数、请求体、表单数据）
+- **缓存管理**：清除缓存的参数和类定义，强制刷新 API 检测
 
 ## 📦 安装
 
@@ -189,6 +191,17 @@ public async Task<IActionResult> UploadFile(
 - **Query 选项卡** → 如果存在 `[FromQuery]` 参数
 - **Headers 选项卡** → 默认选项
 
+### 参数持久化
+
+扩展会自动为每个环境的每个 API 端点保存测试参数：
+
+- **自动保存**：当你修改 URL、请求头、查询参数、请求体或表单数据时，参数会自动保存
+- **自动恢复**：重新打开测试面板时，会自动恢复之前保存的参数
+- **环境感知**：每个环境为同一端点维护独立的参数集
+- **缓存数据**：包括 URL、HTTP 方法、请求头、查询参数、请求体和表单数据
+
+要使用默认值重新开始，请从 CodeLens 按钮或命令面板使用 **"清除缓存并测试"** 命令。
+
 ## ⚙️ 配置
 
 ### 扩展设置
@@ -290,6 +303,7 @@ public async Task<IActionResult> UploadFile(
 | 命令 | 描述 |
 |------|------|
 | `C#HttpRequest: Test API Endpoint` | 为选定端点打开测试面板 |
+| `C#HttpRequest: Clear Cache And Test` | 清除缓存的参数和类定义，然后使用新数据测试端点 |
 | `C#HttpRequest: Manage API Environments` | 打开环境管理对话框 |
 | `C#HttpRequest: Switch Environment` | 在环境之间快速切换 |
 | `C#HttpRequest: Configure API Base URL` | 为当前环境设置基础 URL |
@@ -324,6 +338,12 @@ public async Task<IActionResult> UploadFile(
 - 对于大型项目，使用"fast"搜索策略以提高性能
 - 对于复杂 DTO 的更好准确性，使用"thorough"策略
 - 自定义策略允许根据具体需求进行微调
+
+### 参数管理
+- 扩展会自动保存你的测试参数（请求头、请求体、查询参数等）
+- 参数为每个环境单独保存
+- 要重置为默认值，请从 CodeLens 按钮或命令面板使用 **"清除缓存并测试"** 命令
+- 清除缓存还会刷新类定义，以确保准确的请求生成
 
 ## 🛠️ 故障排除
 
@@ -371,10 +391,6 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 - HTTP 客户端由 [Axios](https://axios-http.com/) 驱动
 - UI 灵感来自 [Apifox](https://apifox.com/)
 - AI 集成支持 OpenAI 及兼容提供商
-
-## 📊 更新日志
-
-查看 [CHANGELOG.md](./CHANGELOG.md) 了解版本历史和更新。
 
 ## 🔗 链接
 
