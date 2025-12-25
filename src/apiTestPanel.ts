@@ -42,6 +42,7 @@ export class ApiTestPanel {
     private _allowBodyTemplateOverwrite: boolean = false;
     private _bodyTemplateUpdatePending: boolean = false;
     private _bodyTemplateUpdateReason: string | null = null;
+    private _skipSavedUrlOnNextUpdate: boolean = false;
 
     private loadSavedParametersForEnvironment(environment: Environment): void {
         if (!this._currentEndpoint) {
@@ -67,9 +68,13 @@ export class ApiTestPanel {
             ? { ...saved.formData }
             : (request.formData ? { ...request.formData } : undefined);
 
+        // Skip saved URL if environment was just switched
+        const useUrl = this._skipSavedUrlOnNextUpdate ? request.url : (saved.url || request.url);
+        this._skipSavedUrlOnNextUpdate = false; // Reset flag
+
         return {
             ...request,
-            url: saved.url || request.url,
+            url: useUrl,
             method: saved.method || request.method,
             headers: mergedHeaders,
             queryParams: mergedQuery,
@@ -354,8 +359,8 @@ export class ApiTestPanel {
                             this.regenerateRequest();
                             break;
                         case 'switchEnvironment':
-                            console.log(`[ApiTestPanel] 🌍 Processing switchEnvironment`);
-                            await this.switchEnvironment();
+                            console.log(`[ApiTestPanel] 🌍 Processing switchEnvironment:`, message.environment);
+                            await this.switchEnvironment(message.environment);
                             break;
                         case 'editEnvironment':
                             console.log(`[ApiTestPanel] ⚙️  Processing editEnvironment`);
@@ -999,7 +1004,22 @@ export class ApiTestPanel {
         await this.reparseBodyParameters();
     }
 
-    private async switchEnvironment(): Promise<void> {
+    private async switchEnvironment(targetEnvName?: string): Promise<void> {
+        // If target environment name is provided, switch directly
+        if (targetEnvName) {
+            const currentEnvironment = this._environmentManager.getCurrentEnvironment();
+            if (targetEnvName !== currentEnvironment?.name) {
+                // Set flag to skip saved URL on next update
+                this._skipSavedUrlOnNextUpdate = true;
+                await this._environmentManager.setCurrentEnvironment(targetEnvName);
+                // Force reload configuration to ensure we have the latest data
+                this._environmentManager.loadConfiguration();
+                this.updateContent();
+            }
+            return;
+        }
+
+        // Otherwise show the picker (for backward compatibility)
         const currentEnvironment = this._environmentManager.getCurrentEnvironment();
         const environments = this._environmentManager.getAllEnvironments();
 
@@ -1018,6 +1038,8 @@ export class ApiTestPanel {
         });
 
         if (selected && selected.environment.name !== currentEnvironment?.name) {
+            // Set flag to skip saved URL on next update
+            this._skipSavedUrlOnNextUpdate = true;
             await this._environmentManager.setCurrentEnvironment(selected.environment.name);
             this.updateContent();
         }
@@ -1069,8 +1091,7 @@ export class ApiTestPanel {
     }
 
     private async openEnvironmentManagement(): Promise<void> {
-        this._panel.reveal(); // Make sure panel is visible while managing
-        await vscode.commands.executeCommand('csharpApiTester.manageEnvironments');
+        await vscode.commands.executeCommand('csharpApiTester.openEnvironmentManager');
     }
 
     private async generateWithAI(data: { jsonTemplate: string }): Promise<void> {
@@ -1350,6 +1371,12 @@ export class ApiTestPanel {
         const hasQueryParam = endpoint.parameters.some(p => p.source === 'query') || Object.keys(request.queryParams).length > 0;
         const hasHeaderParam = endpoint.parameters.some(p => p.source === 'header');
 
+        // Generate environment options HTML
+        const allEnvironments = this._environmentManager.getAllEnvironments();
+        const environmentOptionsHtml = allEnvironments.map(env =>
+            `<option value="${env.name}" ${env.name === _currentEnvironment.name ? 'selected' : ''}>${env.name}</option>`
+        ).join('');
+
         // Prepare data for JavaScript injection
         const requestMethod = request.method || endpoint.method;
         const requestMethodUpper = requestMethod.toUpperCase();
@@ -1384,7 +1411,7 @@ export class ApiTestPanel {
         const bodyJsonWithComments = this.injectErrorCommentsIntoJson(bodyJson, request.errors || []);
         const hasExplicitSavedBody = savedParameters !== undefined && savedParameters.bodyText !== undefined;
         const bodyParsingPlaceholder = hasBodyParam
-            ? '// 正在解析请求体，请稍候...\n// 如果长时间没有更新，请点击上方的“重新解析”按钮，或手动填写请求体。'
+            ? '// Parsing request body, please wait...\n// If it takes too long, click the "Reparse" button above, or fill in the request body manually.'
             : '';
         const initialBodyText = hasExplicitSavedBody
             ? (savedParameters!.bodyText ?? '')
@@ -1436,6 +1463,52 @@ export class ApiTestPanel {
             padding: 20px;
             background: var(--vscode-editor-background);
             border-bottom: 1px solid var(--vscode-panel-border);
+        }
+
+        /* Environment Display */
+        .environment-display {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 6px 16px;
+            background: var(--vscode-editor-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            font-size: 13px;
+        }
+
+        .env-label {
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .env-select {
+            background: var(--vscode-dropdown-background);
+            color: var(--vscode-dropdown-foreground);
+            border: 1px solid var(--vscode-dropdown-border);
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 13px;
+            min-width: 120px;
+            cursor: pointer;
+        }
+
+        .env-select:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+        }
+
+        .env-button {
+            background: transparent;
+            border: 1px solid var(--vscode-panel-border);
+            color: var(--vscode-foreground);
+            padding: 4px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+
+        .env-button:hover {
+            background: var(--vscode-toolbar-hoverBackground);
         }
 
         .method-badge {
@@ -2239,6 +2312,15 @@ export class ApiTestPanel {
 </head>
 <body>
     <div class="container">
+        <!-- Environment Display -->
+        <div class="environment-display">
+            <span class="env-label">Environment:</span>
+            <select id="environment-select" class="env-select" onchange="onEnvironmentChange()">
+                ${environmentOptionsHtml}
+            </select>
+            <button class="env-button" onclick="openEnvManager()" title="Environment Manager">⚙️</button>
+        </div>
+
         <!-- Request Line -->
         <div class="request-line">
             <select id="http-method" class="method-select method-badge ${initialMethodClass}" aria-label="HTTP Method">
@@ -2330,7 +2412,7 @@ export class ApiTestPanel {
 
                     <div class="body-editor-toolbar">
                         <div class="body-editor-toolbar-left">
-                            <button class="format-button" onclick="reparseBodyParams()" title="重新解析参数" id="reparse-btn">🔄 重新解析</button>
+                            <button class="format-button" onclick="reparseBodyParams()" title="Reparse parameters" id="reparse-btn">🔄 Reparse</button>
                             <button class="view-conversation-button" onclick="viewAIConversation()" title="View AI Conversation">💬 View AI</button>
                         </div>
                         <div class="body-editor-toolbar-right">
@@ -2510,11 +2592,11 @@ export class ApiTestPanel {
                     vscode.postMessage({ type: 'cancelParsing' });
                     hideParsingStatus();
 
-                    // 恢复重新解析按钮状态
+                    // Restore reparse button state
                     const reparseBtn = document.getElementById('reparse-btn');
                     if (reparseBtn) {
                         reparseBtn.disabled = false;
-                        reparseBtn.textContent = '🔄 重新解析';
+                        reparseBtn.textContent = '🔄 Reparse';
                     }
                 });
             }
@@ -3114,6 +3196,23 @@ export class ApiTestPanel {
             });
         }
 
+        // Environment change handler
+        function onEnvironmentChange() {
+            const select = document.getElementById('environment-select');
+            const newEnv = select.value;
+            vscode.postMessage({
+                type: 'switchEnvironment',
+                environment: newEnv
+            });
+        }
+
+        // Open environment manager
+        function openEnvManager() {
+            vscode.postMessage({
+                type: 'manageEnvironments'
+            });
+        }
+
         // Open value editor
         function openValueEditor(type, key, value) {
             currentEditingParam = { type, key, value };
@@ -3365,21 +3464,21 @@ export class ApiTestPanel {
                 hideParsingStatus();
                 // 参数解析成功后不再显示弹窗提示
 
-                // 恢复重新解析按钮
+                // Restore reparse button
                 const reparseBtn = document.getElementById('reparse-btn');
                 if (reparseBtn) {
                     reparseBtn.disabled = false;
-                    reparseBtn.textContent = '🔄 重新解析';
+                    reparseBtn.textContent = '🔄 Reparse';
                 }
             } else if (message.type === 'parsingCancelled') {
                 hideParsingStatus();
                 showNotification('❌ ' + (message.message || '解析已取消'), 'info');
 
-                // 恢复重新解析按钮
+                // Restore reparse button
                 const reparseBtn = document.getElementById('reparse-btn');
                 if (reparseBtn) {
                     reparseBtn.disabled = false;
-                    reparseBtn.textContent = '🔄 重新解析';
+                    reparseBtn.textContent = '🔄 Reparse';
                 }
             } else if (message.type === 'parsingFailed') {
                 hideParsingStatus();
@@ -3388,11 +3487,11 @@ export class ApiTestPanel {
                 const errorMsg = message.message || '参数解析失败';
                 console.warn('[Webview] Parsing failed with details:', errorMsg);
 
-                // 恢复重新解析按钮
+                // Restore reparse button
                 const reparseBtn = document.getElementById('reparse-btn');
                 if (reparseBtn) {
                     reparseBtn.disabled = false;
-                    reparseBtn.textContent = '🔄 重新解析';
+                    reparseBtn.textContent = '🔄 Reparse';
                 }
             } else if (message.type === 'updateBodyContent') {
                 updateBodyContent(message.body);

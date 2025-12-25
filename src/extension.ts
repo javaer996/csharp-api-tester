@@ -348,11 +348,11 @@ function updateApiDetectionStatusBar(statusBar: vscode.StatusBarItem): void {
     const enabled = config.get<boolean>('enableApiDetection', true);
 
     if (enabled) {
-        statusBar.text = '$(check) API Detection';
+        statusBar.text = 'Tester: √';
         statusBar.tooltip = 'API Detection is enabled. Click to disable.';
         statusBar.backgroundColor = undefined;
     } else {
-        statusBar.text = '$(x) API Detection';
+        statusBar.text = 'Tester: ×';
         statusBar.tooltip = 'API Detection is disabled. Click to enable.';
         statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     }

@@ -17,20 +17,16 @@ export interface EnvironmentConfig {
 export class EnvironmentManager {
     private static instance: EnvironmentManager;
     private config: EnvironmentConfig;
-    private statusBarItem: vscode.StatusBarItem;
     private configChangeListener?: vscode.Disposable;
 
     private constructor() {
-        this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
         this.config = this.getDefaultConfig(); // Initialize with default config
         this.loadConfiguration();
-        this.updateStatusBar();
 
         this.configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {
             if (event.affectsConfiguration('csharpApiTester.environments') ||
                 event.affectsConfiguration('csharpApiTester.currentEnvironment')) {
                 this.loadConfiguration();
-                this.updateStatusBar();
             }
         });
     }
@@ -100,18 +96,7 @@ export class EnvironmentManager {
         const config = vscode.workspace.getConfiguration('csharpApiTester');
         await config.update('environments', this.config.environments, vscode.ConfigurationTarget.Global);
         await config.update('currentEnvironment', this.config.currentEnvironment, vscode.ConfigurationTarget.Global);
-        this.updateStatusBar();
         console.log(`[EnvironmentManager] Saved configuration`);
-    }
-
-    private updateStatusBar(): void {
-        const currentEnv = this.getCurrentEnvironment();
-        if (currentEnv) {
-            this.statusBarItem.text = `$(server-environment) API: ${currentEnv.name}`;
-            this.statusBarItem.tooltip = `Current API Environment: ${currentEnv.name}\nBase URL: ${currentEnv.baseUrl}\nBase Path: ${currentEnv.basePath}\nClick to switch environment`;
-            this.statusBarItem.command = 'csharpApiTester.switchEnvironment';
-            this.statusBarItem.show();
-        }
     }
 
     public getCurrentEnvironment(): Environment | null {
@@ -207,7 +192,6 @@ export class EnvironmentManager {
     }
 
     public dispose(): void {
-        this.statusBarItem.dispose();
         this.configChangeListener?.dispose();
     }
 
