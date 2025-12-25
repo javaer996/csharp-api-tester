@@ -60,13 +60,16 @@ export class EnvironmentPanel {
 
         // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
-            message => {
+            async message => {
                 switch (message.command) {
                     case 'loadEnvironments':
                         this._loadEnvironments();
                         return;
                     case 'saveEnvironment':
                         this._saveEnvironment(message.environment);
+                        return;
+                    case 'confirmDelete':
+                        await this._confirmDelete(message.name);
                         return;
                     case 'deleteEnvironment':
                         this._deleteEnvironment(message.name);
@@ -129,6 +132,17 @@ export class EnvironmentPanel {
                 success: false,
                 message: `Failed to save environment: ${error}`
             });
+        }
+    }
+
+    private async _confirmDelete(name: string) {
+        const confirmed = await vscode.window.showWarningMessage(
+            `Are you sure you want to delete environment '${name}'?`,
+            { modal: true },
+            'Delete'
+        );
+        if (confirmed === 'Delete') {
+            this._deleteEnvironment(name);
         }
     }
 
@@ -540,9 +554,8 @@ export class EnvironmentPanel {
         }
 
         function deleteEnvironment(name) {
-            if (confirm(\`Are you sure you want to delete environment '\${name}'?\`)) {
-                vscode.postMessage({ command: 'deleteEnvironment', name: name });
-            }
+            // Cannot use confirm() in webview - send request to extension to show dialog
+            vscode.postMessage({ command: 'confirmDelete', name: name });
         }
 
         function showMessage(text, type) {
