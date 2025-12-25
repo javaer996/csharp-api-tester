@@ -4,7 +4,7 @@
 
 一个智能的 Visual Studio Code 扩展，可以直接从代码编辑器中自动检测和测试 C# Web API 端点，并支持 AI 驱动的智能 JSON 生成。
 
-![Version](https://img.shields.io/badge/version-1.0.3-blue)
+![Version](https://img.shields.io/badge/version-1.0.4-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -40,7 +40,7 @@
 ### 🌍 环境管理
 - 支持多环境（开发、预发布、生产等）
 - 每个环境具有自定义的基础 URL、基础路径和请求头
-- 通过状态栏快速切换
+- 通过测试面板顶部的下拉菜单快速切换
 - 每个环境独立配置请求头
 - 工作区级别设置持久化
 
@@ -100,9 +100,10 @@ public class UsersController : ControllerBase
 
 首次使用？设置你的环境：
 
-1. 点击状态栏中的环境指示器
-2. 选择"添加新环境"
-3. 配置：
+1. 点击任意端点上的"测试 API"按钮打开测试面板
+2. 使用面板顶部的环境下拉菜单切换或管理环境
+3. 点击 ⚙️ 图标打开环境管理器进行详细配置
+4. 配置：
    - **名称**："开发环境"
    - **基础 URL**："http://localhost:5000"
    - **基础路径**："/api"（可选）
@@ -304,7 +305,7 @@ public async Task<IActionResult> UploadFile(
 |------|------|
 | `C#HttpRequest: Test API Endpoint` | 为选定端点打开测试面板 |
 | `C#HttpRequest: Clear Cache And Test` | 清除缓存的参数和类定义，然后使用新数据测试端点 |
-| `C#HttpRequest: Manage API Environments` | 打开环境管理对话框 |
+| `C#HttpRequest: Environment Manager` | 打开环境管理器，支持添加/编辑/删除环境 |
 | `C#HttpRequest: Switch Environment` | 在环境之间快速切换 |
 | `C#HttpRequest: Configure API Base URL` | 为当前环境设置基础 URL |
 | `C#HttpRequest: Toggle API Detection` | 启用/禁用自动 API 检测 |
@@ -359,9 +360,10 @@ public async Task<IActionResult> UploadFile(
 4. 查看控制台输出以获取详细错误信息
 
 ### 环境无法切换
-1. 点击状态栏中的环境指示器
-2. 从列表中选择所需环境
-3. 验证工作区设置中的环境配置
+1. 打开 API 测试面板
+2. 使用面板顶部的环境下拉菜单
+3. 点击 ⚙️ 图标打开环境管理器进行详细配置
+4. 验证工作区设置中的环境配置
 
 ## 🤝 贡献
 

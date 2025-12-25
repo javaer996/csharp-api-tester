@@ -4,7 +4,7 @@
 
 An intelligent Visual Studio Code extension that automatically detects and tests C# Web API endpoints directly from your code editor with AI-powered smart JSON generation.
 
-![Version](https://img.shields.io/badge/version-1.0.3-blue)
+![Version](https://img.shields.io/badge/version-1.0.4-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.74.0+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -40,7 +40,7 @@ An intelligent Visual Studio Code extension that automatically detects and tests
 ### 🌍 Environment Management
 - Multiple environment support (Development, Staging, Production, etc.)
 - Each environment with custom base URL, base path, and headers
-- Quick switching via status bar
+- Quick switching via dropdown in the test panel
 - Per-environment header configuration
 - Workspace-level settings persistence
 
@@ -100,9 +100,10 @@ You'll see **"🚀 Test API"** buttons above each method. Click to test!
 
 First time using? Set up your environment:
 
-1. Click the environment indicator in the status bar
-2. Choose "Add New Environment"
-3. Configure:
+1. Open the API test panel by clicking "Test API" on any endpoint
+2. Use the environment dropdown at the top of the panel to switch or manage environments
+3. Click the ⚙️ icon to open Environment Manager for detailed configuration
+4. Configure:
    - **Name**: "Development"
    - **Base URL**: "http://localhost:5000"
    - **Base Path**: "/api" (optional)
@@ -304,7 +305,7 @@ For long header values or query parameters:
 |---------|-------------|
 | `C#HttpRequest: Test API Endpoint` | Open test panel for selected endpoint |
 | `C#HttpRequest: Clear Cache And Test` | Clear cached parameters and class definitions, then test endpoint with fresh data |
-| `C#HttpRequest: Manage API Environments` | Open environment management dialog |
+| `C#HttpRequest: Environment Manager` | Open environment management dialog with add/edit/delete capabilities |
 | `C#HttpRequest: Switch Environment` | Quick switch between environments |
 | `C#HttpRequest: Configure API Base URL` | Set base URL for current environment |
 | `C#HttpRequest: Toggle API Detection` | Enable/disable automatic API detection |
@@ -359,9 +360,10 @@ This extension is perfect for:
 4. Check console output for detailed error messages
 
 ### Environment Not Switching
-1. Click the environment indicator in status bar
-2. Select desired environment from the list
-3. Verify environment settings in workspace settings
+1. Open the API test panel
+2. Use the environment dropdown at the top of the panel
+3. Click the ⚙️ icon to open Environment Manager for detailed configuration
+4. Verify environment settings in workspace settings
 
 ## 🤝 Contributing
 
